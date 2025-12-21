@@ -16,16 +16,31 @@ Since Python was not detected on your system, we've provided a Docker setup for 
     ```
 4.  Open your browser to: http://localhost:8501
 
-### Option 2: Using Local Python
+### Option 2: Manual Setup (from GitHub)
 
-If you install Python manually:
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/your-username/anki-ai.git
+    cd anki-ai
+    ```
 
-1.  Install Python 3.10+.
-2.  Install dependencies:
+2.  **Create a Virtual Environment (Recommended):**
+    ```bash
+    # Windows
+    python -m venv venv
+    .\venv\Scripts\activate
+
+    # macOS/Linux
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
+
+3.  **Install dependencies:**
     ```bash
     pip install -r requirements.txt
     ```
-3.  Run the app:
+
+4.  **Run the app:**
     ```bash
     streamlit run app.py
     ```
