@@ -1,0 +1,12 @@
+services:
+  anki-ai:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Interactive mode for debugging
+    stdin_open: true
+    tty: true
