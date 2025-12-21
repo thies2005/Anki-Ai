@@ -34,5 +34,5 @@ If you install Python manually:
 
 *   **PDF Parsing**: Extracts text from medical text books.
 *   **Smart Chunking**: Splits large texts into 10k character windows.
-*   **Gemini Integration**: Uses `gemini-1.5-flash` for high-speed, cost-effective generation.
+*   **Gemini Integration**: Uses any gemmini for high-speed, cost-effective generation.
 *   **Anki Formatting**: Outputs `;` separated values safe for Anki import.
