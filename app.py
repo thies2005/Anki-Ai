@@ -41,6 +41,9 @@ with st.sidebar:
         if key and key.strip():
             fallback_keys.append(key.strip())
             
+    # Init api_key
+    api_key = None
+
     if user_api_key:
         api_key = user_api_key
         # Use fallback keys as backup
@@ -54,6 +57,7 @@ with st.sidebar:
             st.info(f"Using Fallback API Key 1 (Dev Mode)")
         else:
             st.error("No API Keys found (Custom or Fallback).")
+            api_key = None
             # FIX: Don't call configure_gemini with an empty string
             configure_gemini(None, fallback_keys=[])
     
