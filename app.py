@@ -102,7 +102,6 @@ with st.sidebar:
     st.divider()
     chunk_size = st.slider("Chunk Size (chars)", 5000, 20000, 10000, step=1000)
     developer_mode = st.toggle("Developer Mode", value=False)
-    enable_direct_chat = st.toggle("Enable Direct AI Chat", value=False)
 
 # Split View
 st.divider()
@@ -162,6 +161,41 @@ with col_gen:
             with st.expander("📄 Document Summary", expanded=True):
                 for ch in st.session_state['chapters_data']:
                     st.markdown(f"**{ch['title']}:** {ch['summary']}")
+            
+            # Chat with PDF (document-context)
+            with st.expander("💬 Chat with PDF", expanded=False):
+                all_text_context = "\n\n".join([c['text'] for c in st.session_state['chapters_data']])
+                st.caption(f"Context: {len(st.session_state['chapters_data'])} files loaded.")
+                
+                if "pdf_messages" not in st.session_state:
+                    st.session_state.pdf_messages = []
+
+                pdf_chat_container = st.container(height=400)
+                with pdf_chat_container:
+                    for message in st.session_state.pdf_messages:
+                        with st.chat_message(message["role"]):
+                            st.markdown(message["content"])
+
+                if pdf_prompt := st.chat_input("Ask about the PDFs...", key="pdf_chat_input"):
+                    st.session_state.pdf_messages.append({"role": "user", "content": pdf_prompt})
+                    with pdf_chat_container:
+                        with st.chat_message("user"):
+                            st.markdown(pdf_prompt)
+
+                        with st.chat_message("assistant"):
+                            provider_code = "google" if provider == "Google Gemini" else "openrouter"
+                            with st.spinner("Thinking..."):
+                                response = get_chat_response(
+                                    st.session_state.pdf_messages, 
+                                    all_text_context, 
+                                    provider_code, 
+                                    model_name,
+                                    direct_chat=False
+                                )
+                            st.markdown(response)
+                    
+                    st.session_state.pdf_messages.append({"role": "assistant", "content": response})
+                    st.rerun()
             
             st.divider()
 
@@ -263,54 +297,41 @@ with col_gen:
                     if new_title != ch['title']:
                         st.session_state['chapters_data'][idx]['title'] = new_title
 
-# ==================== CHAT COLUMN ====================
+# ==================== GENERAL AI CHAT COLUMN ====================
 with col_chat:
-    st.subheader("2. Chat with PDF")
+    st.subheader("🤖 General AI Chat")
+    st.caption(f"Model: {model_name}")
     
-    if 'chapters_data' not in st.session_state or not st.session_state['chapters_data']:
-        st.info("Upload and process files to enable chat.")
-    else:
-        all_text_context = "\n\n".join([c['text'] for c in st.session_state['chapters_data']])
-        st.caption(f"Context: {len(st.session_state['chapters_data'])} files loaded.")
+    if "general_messages" not in st.session_state:
+        st.session_state.general_messages = []
+
+    gen_chat_container = st.container(height=600)
+    with gen_chat_container:
+        for message in st.session_state.general_messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+    if gen_prompt := st.chat_input("Chat with the AI...", key="general_chat_input"):
+        st.session_state.general_messages.append({"role": "user", "content": gen_prompt})
+        with gen_chat_container:
+            with st.chat_message("user"):
+                st.markdown(gen_prompt)
+
+            with st.chat_message("assistant"):
+                provider_code = "google" if provider == "Google Gemini" else "openrouter"
+                with st.spinner("Thinking..."):
+                    response = get_chat_response(
+                        st.session_state.general_messages, 
+                        "",  # No context for general chat
+                        provider_code, 
+                        model_name,
+                        direct_chat=True
+                    )
+                st.markdown(response)
         
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
-        
-        chat_mode = "Doc Context"
-        if enable_direct_chat:
-            chat_mode = st.radio("Chat Mode", ["Doc Context", "Direct API"], index=0, horizontal=True)
-            if "prev_chat_mode" not in st.session_state:
-                st.session_state.prev_chat_mode = chat_mode
-            if st.session_state.prev_chat_mode != chat_mode:
-                st.session_state.messages = [] # Clear history on mode switch
-                st.session_state.prev_chat_mode = chat_mode
-
-        chat_container = st.container(height=600)
-        with chat_container:
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
-
-        if prompt := st.chat_input("Ask about the PDFs...", key="chat_input_widget"):
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with chat_container:
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-
-                with st.chat_message("assistant"):
-                    provider_code = "google" if provider == "Google Gemini" else "openrouter"
-                    with st.spinner("Thinking..."):
-                        response = get_chat_response(
-                            st.session_state.messages, 
-                            all_text_context, 
-                            provider_code, 
-                            model_name,
-                            direct_chat=(chat_mode == "Direct API")
-                        )
-                    st.markdown(response)
-            
-            st.session_state.messages.append({"role": "assistant", "content": response})
-            st.rerun()
+        st.session_state.general_messages.append({"role": "assistant", "content": response})
+        st.rerun()
 
 if not api_key:
     st.toast("⚠️ API Key not configured")
+
