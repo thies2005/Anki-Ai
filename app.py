@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 from utils.pdf_processor import extract_text_from_pdf, clean_text, recursive_character_text_splitter
-from utils.llm_handler import configure_gemini, configure_openrouter, process_chunk, get_chat_response, sort_files_with_gemini, generate_chapter_summary, generate_full_summary
+from utils.llm_handler import configure_gemini, configure_openrouter, process_chunk, get_chat_response, sort_files_with_gemini, generate_chapter_summary, generate_full_summary, detect_chapters_in_text, split_text_by_chapters
 
 # Page Config
 st.set_page_config(
@@ -118,6 +118,7 @@ with col_gen:
         custom_prompt = st.text_area("Custom Instructions", help="E.g., 'Focus on Pharmacology'")
         deck_type = st.radio("Deck Organization", ["Subdecks (Medical::Item)", "Tags Only (Deck: Medical, Tag: Item)", "Both"], help="Organization structure.")
         formatting_mode = st.radio("Card Formatting", ["Basic + MathJax", "Markdown", "Legacy LaTeX"], index=0, help="Basic + MathJax = works with default Anki. Markdown = styled text. Legacy LaTeX = [latex]...[/latex] tags.")
+        detect_chapters = st.toggle("Auto-Detect Chapters within PDFs", value=False, help="Uses AI to split each PDF into individual chapters for better deck organization.")
 
     uploaded_files = st.file_uploader("Upload Medical PDF(s)", type=["pdf"], accept_multiple_files=True, key="anki_uploader")
 
@@ -138,7 +139,36 @@ with col_gen:
                         text = extract_text_from_pdf(f)
                         fname = f.name.replace(".pdf", "").replace("_", " ").title()
                         
-                        # Generate Summary
+                        # Chapter Detection Option
+                        if detect_chapters:
+                            progress_text.text(f"Detecting chapters in {name}...")
+                            detected_chapters = detect_chapters_in_text(text, fname, model_name=summary_model)
+                            
+                            if detected_chapters:
+                                progress_text.text(f"Splitting {name} into {len(detected_chapters)} chapters...")
+                                chapter_texts = split_text_by_chapters(text, detected_chapters)
+                                
+                                if chapter_texts:
+                                    # Successfully split into chapters
+                                    for ch_data in chapter_texts:
+                                        ch_title = ch_data['title']
+                                        ch_text = ch_data['text']
+                                        
+                                        # Generate summary for each chapter
+                                        try:
+                                            ch_summary = generate_chapter_summary(ch_text, model_name=summary_model)
+                                        except:
+                                            ch_summary = "(Summary generation failed)"
+                                        
+                                        file_chapters.append({
+                                            "title": f"{fname} - {ch_title}",
+                                            "text": ch_text,
+                                            "summary": ch_summary,
+                                            "parent_file": fname
+                                        })
+                                    continue  # Move to next file
+                        
+                        # Default: treat entire file as one chapter
                         progress_text.text(f"Summarizing {name}...")
                         try:
                             summary = generate_chapter_summary(text, model_name=summary_model)
@@ -148,11 +178,12 @@ with col_gen:
                         file_chapters.append({
                             "title": fname,
                             "text": text,
-                            "summary": summary
+                            "summary": summary,
+                            "parent_file": fname
                         })
                 
                 st.session_state['chapters_data'] = file_chapters
-                st.toast(f"Processed {len(file_chapters)} files", icon="📚")
+                st.toast(f"Processed {len(file_chapters)} {'chapters' if detect_chapters else 'files'}", icon="📚")
         
         # Show Data & Generate
         if 'chapters_data' in st.session_state and st.session_state['chapters_data']:
@@ -235,14 +266,23 @@ with col_gen:
                                 try:
                                     df_chunk = pd.read_csv(StringIO(csv_chunk), sep="\t", names=["Front", "Back"], engine="python", quotechar='"', on_bad_lines='skip')
                                     clean_title = chapter['title'].replace(" ", "_").replace(":", "-")
+                                    parent_file = chapter.get('parent_file', chapter['title']).replace(" ", "_").replace(":", "-")
+                                    
                                     if "Subdecks" in deck_type:
-                                        df_chunk["Deck"] = f"Medical::{clean_title}"
+                                        # If chapters detected, create: Medical::ParentFile::Chapter
+                                        if 'parent_file' in chapter and chapter['parent_file'] != chapter['title']:
+                                            df_chunk["Deck"] = f"Medical::{parent_file}::{clean_title}"
+                                        else:
+                                            df_chunk["Deck"] = f"Medical::{clean_title}"
                                         df_chunk["Tag"] = ""
                                     elif "Tags" in deck_type:
                                          df_chunk["Deck"] = "Medical"
                                          df_chunk["Tag"] = clean_title
                                     else:
-                                         df_chunk["Deck"] = f"Medical::{clean_title}"
+                                         if 'parent_file' in chapter and chapter['parent_file'] != chapter['title']:
+                                             df_chunk["Deck"] = f"Medical::{parent_file}::{clean_title}"
+                                         else:
+                                             df_chunk["Deck"] = f"Medical::{clean_title}"
                                          df_chunk["Tag"] = clean_title
                                     all_dfs.append(df_chunk)
                                 except: pass

@@ -425,3 +425,99 @@ def generate_full_summary(chapter_summaries: list[str], model_name: str = "gemma
             return response.text
     except Exception as e:
         return f"Full summary failed: {str(e)}"
+
+def detect_chapters_in_text(text: str, file_name: str, model_name: str = "gemma-3-27b-it") -> list:
+    """
+    Detects chapters within a text document using AI.
+    Returns: [{"title": "Chapter 1 Name", "description": "..."}, ...]
+    """
+    # Truncate to first 50000 chars for analysis
+    sample_text = text[:50000]
+    
+    prompt = f"""Analyze this document text and identify distinct chapters or major sections.
+
+Document: {file_name}
+
+Text Sample:
+{sample_text}
+
+Output STRICT JSON array of chapters with:
+[
+  {{"title": "Chapter 1: Introduction", "description": "brief 1-sentence summary"}},
+  {{"title": "Chapter 2: Main Topic", "description": "brief 1-sentence summary"}},
+  ...
+]
+
+Rules:
+1. Look for clear chapter headings, section titles, or major topic transitions
+2. If no clear chapters exist, return an empty array []
+3. Minimum 2 chapters to qualify (otherwise return [])
+4. Maximum 20 chapters
+5. Output ONLY valid JSON, no explanations
+"""
+
+    try:
+        import json
+        if "/" in model_name:
+            # OpenRouter
+            system_instruction = "You are a Document Chapter Analyzer. Output strictly valid JSON."
+            resp_text = _generate_with_openrouter(model_name, system_instruction, prompt)
+        else:
+            # Google
+            response = _generate_with_retry(
+                model_name,
+                prompt,
+                types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1),
+                fallback_to_flash_lite=True
+            )
+            resp_text = response.text
+            
+        chapters = json.loads(resp_text)
+        return chapters if isinstance(chapters, list) and len(chapters) >= 2 else []
+    except:
+        return []  # If detection fails, treat as single document
+
+
+def split_text_by_chapters(text: str, chapters: list) -> list:
+    """
+    Attempts to split text based on detected chapter titles.
+    Returns: [{"title": "...", "text": "..."}, ...]
+    """
+    if not chapters:
+        return []
+    
+    # Simple heuristic: search for chapter titles in the text and split
+    import re
+    chapter_splits = []
+    
+    for i, chapter in enumerate(chapters):
+        title = chapter.get("title", "")
+        # Try to find this title in the text
+        # Look for variations: with/without "Chapter X:", case-insensitive
+        pattern = re.escape(title[:30])  # Use first 30 chars to be flexible
+        matches = list(re.finditer(pattern, text, re.IGNORECASE))
+        
+        if matches:
+            start_pos = matches[0].start()
+            # Find end position (start of next chapter or end of text)
+            if i < len(chapters) - 1:
+                next_title = chapters[i + 1].get("title", "")
+                next_pattern = re.escape(next_title[:30])
+                next_matches = list(re.finditer(next_pattern, text[start_pos + 100:], re.IGNORECASE))
+                if next_matches:
+                    end_pos = start_pos + 100 + next_matches[0].start()
+                else:
+                    end_pos = len(text)
+            else:
+                end_pos = len(text)
+            
+            chapter_splits.append({
+                "title": title,
+                "text": text[start_pos:end_pos]
+            })
+    
+    # If we couldn't split reliably, return empty to fall back to whole document
+    if len(chapter_splits) < len(chapters) // 2:
+        return []
+    
+    return chapter_splits
