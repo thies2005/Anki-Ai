@@ -53,9 +53,9 @@ def rate_limit_delay(model_name: str):
         delay = 1.0 
     time.sleep(delay)
 
-def _generate_with_retry(model_name: str, contents, config, fallback_to_flash_lite: bool = False):
+def _generate_with_retry(model_name: str, contents, config, fallback_to_flash_lite: bool = True):
     """
-    Centralized generation with Key Rotation (Primary -> Fallbacks) and optional Model Fallback.
+    Centralized generation with Key Rotation (Primary -> Fallbacks) and Model Fallback.
     """
     global _PRIMARY_CLIENT, _FALLBACK_CLIENTS
     
@@ -64,6 +64,15 @@ def _generate_with_retry(model_name: str, contents, config, fallback_to_flash_li
         
     rate_limit_delay(model_name)
     
+    # Define fallback models for Google
+    google_fallbacks = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3-flash", "gemma-3-27b-it"]
+    # Ensure current model is tried first, then the others
+    models_to_try = [model_name]
+    if fallback_to_flash_lite:
+        for m in google_fallbacks:
+            if m not in models_to_try:
+                models_to_try.append(m)
+
     # Helper to attempt generation on a specific client
     def attempt(client, model):
         return client.models.generate_content(
@@ -74,58 +83,80 @@ def _generate_with_retry(model_name: str, contents, config, fallback_to_flash_li
         
     errors = []
     
-    # 1. Try Primary Key
-    try:
-        return attempt(_PRIMARY_CLIENT, model_name)
-    except Exception as e:
-        errors.append(f"Primary Key Error: {str(e)}")
-        # Check for Rate Limit / Quota / Auth errors to trigger switch
-        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) or "403" in str(e):
-             # 2. Try Fallback Keys
-             for idx, client in enumerate(_FALLBACK_CLIENTS):
-                 try:
-                     time.sleep(1) # Brief pause before switching
-                     return attempt(client, model_name)
-                 except Exception as e2:
-                     errors.append(f"Fallback Key {idx+1} Error: {str(e2)}")
-                     continue # Try next key
-    
-    # 3. Model Fallback (Flash Lite)
-    # Triggered if all keys failed AND fallback enabled
-    if fallback_to_flash_lite:
+    for current_model in models_to_try:
+        # Try Primary Key for this model
         try:
-            return attempt(_PRIMARY_CLIENT, "gemini-2.5-flash-lite")
-        except Exception as e3:
-             errors.append(f"Flash Lite Fallback Error: {str(e3)}")
-             
+            return attempt(_PRIMARY_CLIENT, current_model)
+        except Exception as e:
+            err_str = str(e)
+            errors.append(f"Model {current_model} (Primary Key) Error: {err_str}")
+            
+            # If rate limited (429) or other retryable error, try fallback keys
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "503" in err_str:
+                for idx, client in enumerate(_FALLBACK_CLIENTS):
+                    try:
+                        time.sleep(1) # Brief pause before switching
+                        return attempt(client, current_model)
+                    except Exception as e2:
+                        errors.append(f"Model {current_model} (Fallback Key {idx+1}) Error: {str(e2)}")
+                        continue # Try next key
+            
+            # If it's not a 429/retryable error on primary key, don't try other keys for this model?
+            # Actually, usually safer to try all keys anyway, but if it's a 400 (Bad Request), keys won't help.
+            # However, for 429, we definitely want to try other keys.
+            
     # If we got here, everything failed.
     raise Exception(f"All attempts failed. Errors: {'; '.join(errors)}")
 
 def _generate_with_openrouter(model_name: str, system_instruction: str, user_content: str):
-    """Generates content using OpenRouter."""
+    """Generates content using OpenRouter with 429 fallback to other free models."""
     global _OPENROUTER_CLIENT
     if not _OPENROUTER_CLIENT:
         raise ValueError("OpenRouter API Key not configured.")
 
-    rate_limit_delay(model_name)
+    # List of free models to try if the primary one fails with 429
+    openrouter_fallbacks = [
+        "xiaomi/mimo-v2-flash:free",
+        "google/gemini-2.0-flash-exp:free",
+        "mistralai/devstral-2512:free",
+        "qwen/qwen3-coder:free",
+        "google/gemma-3-27b-it:free"
+    ]
+    
+    # Try the requested model first
+    models_to_try = [model_name]
+    for m in openrouter_fallbacks:
+        if m not in models_to_try:
+            models_to_try.append(m)
 
-    # Clean non-printable or suspicious characters if needed, but UTF-8 should handle it.
-    # We ensure we're passing clean Unicode strings.
-    try:
-        response = _OPENROUTER_CLIENT.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_instruction},
-                {"role": "user", "content": user_content}
-            ],
-            temperature=0.2,
-            max_tokens=16000
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        # Safer exception reporting for non-ASCII errors
-        error_msg = getattr(e, 'message', str(e))
-        raise Exception(f"OpenRouter Error: {error_msg}")
+    errors = []
+    for current_model in models_to_try:
+        try:
+            rate_limit_delay(current_model)
+            if errors:
+                time.sleep(1) # Extra pause between different model attempts
+            response = _OPENROUTER_CLIENT.chat.completions.create(
+                model=current_model,
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": user_content}
+                ],
+                temperature=0.2,
+                max_tokens=16000
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            error_msg = getattr(e, 'message', str(e))
+            errors.append(f"Model {current_model} Error: {error_msg}")
+            
+            # Only switch model on 429 (Rate Limit) or 503 (Overloaded)
+            if "429" in error_msg or "rate limit" in error_msg.lower() or "503" in error_msg:
+                continue
+            else:
+                # For other errors (like 401 Auth), stop and show error
+                raise Exception(f"OpenRouter Critical Error: {error_msg}")
+
+    raise Exception(f"All OpenRouter models failed. Errors: {'; '.join(errors[-3:])}")
 
 def get_chat_response(messages: list, context: str, provider: str, model_name: str, direct_chat: bool = False) -> str:
     """
@@ -165,7 +196,7 @@ def get_chat_response(messages: list, context: str, provider: str, model_name: s
             # We use generate_content with the full history as contents, or chat session?
             # Unified generate_content is stateless-ish but we can pass list of contents.
             # But generate_content expects list of Content objects.
-            response = _generate_with_retry(model_name, gemini_hist, config)
+            response = _generate_with_retry(model_name, gemini_hist, config, fallback_to_flash_lite=True)
             return response.text
         except Exception as e:
             return f"Chat Error: {e}"
@@ -240,8 +271,7 @@ def process_chunk(text_chunk: str, provider: str = "google", model_name: str = "
     3. Completeness: EVERY card MUST have a Question (Front) AND an Answer (Back). Do not generate headers.
     4. Strictness: Output ONLY the CSV content. No code fences. One card per line.
     
-    CRITICAL INSTRUCTION: GENERATE AS MANY CARDS AS POSSIBLE.
-    Target: 30-50 cards for this text chunk. Do not summarize. Convert every fact into a card.
+    
     
     Custom Preferences:
     5. {length_instruction}
@@ -258,7 +288,7 @@ def process_chunk(text_chunk: str, provider: str = "google", model_name: str = "
                 temperature=0.2,
                 max_output_tokens=65536,
             )
-            response = _generate_with_retry(model_name, text_chunk, config, fallback_to_flash_lite=False)
+            response = _generate_with_retry(model_name, text_chunk, config, fallback_to_flash_lite=True)
             text_resp = response.text
         elif provider == "openrouter":
             text_resp = _generate_with_openrouter(model_name, system_instruction, text_chunk)
