@@ -102,6 +102,7 @@ with st.sidebar:
     st.divider()
     chunk_size = st.slider("Chunk Size (chars)", 5000, 20000, 10000, step=1000)
     developer_mode = st.toggle("Developer Mode", value=False)
+    enable_direct_chat = st.toggle("Enable Direct AI Chat", value=False)
 
 # Split View
 st.divider()
@@ -274,6 +275,15 @@ with col_chat:
         
         if "messages" not in st.session_state:
             st.session_state.messages = []
+        
+        chat_mode = "Doc Context"
+        if enable_direct_chat:
+            chat_mode = st.radio("Chat Mode", ["Doc Context", "Direct API"], index=0, horizontal=True)
+            if "prev_chat_mode" not in st.session_state:
+                st.session_state.prev_chat_mode = chat_mode
+            if st.session_state.prev_chat_mode != chat_mode:
+                st.session_state.messages = [] # Clear history on mode switch
+                st.session_state.prev_chat_mode = chat_mode
 
         chat_container = st.container(height=600)
         with chat_container:
@@ -294,7 +304,8 @@ with col_chat:
                             st.session_state.messages, 
                             all_text_context, 
                             provider_code, 
-                            model_name
+                            model_name,
+                            direct_chat=(chat_mode == "Direct API")
                         )
                     st.markdown(response)
             

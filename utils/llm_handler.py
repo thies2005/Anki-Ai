@@ -123,21 +123,24 @@ def _generate_with_openrouter(model_name: str, system_instruction: str, user_con
     except Exception as e:
         raise Exception(f"OpenRouter Error: {str(e)}")
 
-def get_chat_response(messages: list, context: str, provider: str, model_name: str) -> str:
+def get_chat_response(messages: list, context: str, provider: str, model_name: str, direct_chat: bool = False) -> str:
     """
-    Handles chat interaction with the document context.
+    Handles chat interaction.
+    If direct_chat=True, it chats with the model directly without document context.
     messages: list of {"role": "user"|"assistant", "content": "..."}
     """
-    context_limit = 200000 if "xiaomi" in model_name.lower() else 100000
-    
-    system_prompt = f"""You are a helpful Medical Assistant AI. 
-    Answer questions based strictly on the provided medical context.
-    
-    Context:
-    {context[:context_limit]} 
-    
-    (Context truncated to {context_limit} chars for safety)
-    """
+    if direct_chat:
+        system_prompt = "You are a helpful and intelligent AI assistant. Answer the user's questions clearly and accurately."
+    else:
+        context_limit = 200000 if "xiaomi" in model_name.lower() else 100000
+        system_prompt = f"""You are a helpful Medical Assistant AI. 
+        Answer questions based strictly on the provided medical context.
+        
+        Context:
+        {context[:context_limit]} 
+        
+        (Context truncated to {context_limit} chars for safety)
+        """
     
     if provider == "google":
         global _PRIMARY_CLIENT
