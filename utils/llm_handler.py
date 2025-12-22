@@ -109,6 +109,8 @@ def _generate_with_openrouter(model_name: str, system_instruction: str, user_con
 
     rate_limit_delay(model_name)
 
+    # Clean non-printable or suspicious characters if needed, but UTF-8 should handle it.
+    # We ensure we're passing clean Unicode strings.
     try:
         response = _OPENROUTER_CLIENT.chat.completions.create(
             model=model_name,
@@ -121,7 +123,9 @@ def _generate_with_openrouter(model_name: str, system_instruction: str, user_con
         )
         return response.choices[0].message.content
     except Exception as e:
-        raise Exception(f"OpenRouter Error: {str(e)}")
+        # Safer exception reporting for non-ASCII errors
+        error_msg = getattr(e, 'message', str(e))
+        raise Exception(f"OpenRouter Error: {error_msg}")
 
 def get_chat_response(messages: list, context: str, provider: str, model_name: str, direct_chat: bool = False) -> str:
     """

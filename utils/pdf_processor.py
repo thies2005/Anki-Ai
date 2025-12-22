@@ -1,5 +1,6 @@
 import fitz  # PyMuPDF
 import re
+import unicodedata
 
 def extract_text_from_pdf(pdf_stream) -> str:
     """
@@ -11,7 +12,8 @@ def extract_text_from_pdf(pdf_stream) -> str:
         text = []
         for page in doc:
             text.append(page.get_text())
-        return "\n".join(text)
+        raw_text = "\n".join(text)
+        return unicodedata.normalize('NFC', raw_text)
     except Exception as e:
         raise ValueError(f"Error reading PDF: {e}")
 
@@ -24,7 +26,8 @@ def get_pdf_front_matter(pdf_stream, page_limit: int = 50) -> str:
         limit = min(page_limit, doc.page_count)
         for i in range(limit):
              text.append(doc.load_page(i).get_text())
-        return "\n".join(text)
+        raw_text = "\n".join(text)
+        return unicodedata.normalize('NFC', raw_text)
     except Exception as e:
         return ""
 
@@ -99,9 +102,10 @@ def extract_chapters_from_pdf(pdf_stream, ai_extracted_toc: list = None) -> list
             for p_idx in range(p_start, p_end + 1):
                 chapter_text_list.append(doc.load_page(p_idx).get_text())
         
+        raw_text = "\n".join(chapter_text_list)
         chapters.append({
             "title": title,
-            "text": "\n".join(chapter_text_list)
+            "text": unicodedata.normalize('NFC', raw_text)
         })
         
     return chapters
