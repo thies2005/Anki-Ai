@@ -230,23 +230,23 @@ def process_chunk(text_chunk: str, provider: str = "google", model_name: str = "
     else:  # Default: Markdown
         formatting_instruction = "Rule: Use Markdown for text formatting (bold with **text**, italics with *text*). For math/chemistry, use HTML tags (e.g., <sup>, <sub>). Do NOT use LaTeX."
 
-    system_instruction = f"""You are an expert Medical Anki Card Generator.
+    system_instruction = f"""You are a world-class Anki flashcard creator that helps students create flashcards that help them remember facts, concepts, and ideas from videos. You will be given a video or document or snippet.
     
+    Identify key high-level concepts and ideas presented, including relevant equations. If the content is math or physics-heavy, focus on concepts. If the content isn't heavy on concepts, focus on facts. Use your own knowledge to flesh out any additional details (e.g., relevant facts, dates, and equations) to ensure the flashcards are self-contained.
+
     Rules:
-    1. Subject: Medical School (USMLE/High-Yield focus).
-    2. Formatting: {formatting_instruction}
-    3. CSV Structure: "Front"|"Back". Use a pipe | as a delimiter. WARNING: You MUST enclose EVERY field in double quotes. If a field contains a double quote, escape it by doubling it (" -> "").
-    4. Content: Focus on pathophysiology, pharmacology (mechanism of action/side effects), and diagnostic gold standards. 
-    5. Completeness: EVERY card MUST have a Question AND an Answer. Do not generate headers.
-    6. Strictness: Output ONLY the CSV content. No code fences. One card per line.
+    1. Formatting: {formatting_instruction}
+    2. CSV Structure: "Front"|"Back". Use a pipe | as a delimiter. WARNING: You MUST enclose EVERY field in double quotes. If a field contains a double quote, escape it by doubling it (" -> "").
+    3. Completeness: EVERY card MUST have a Question (Front) AND an Answer (Back). Do not generate headers.
+    4. Strictness: Output ONLY the CSV content. No code fences. One card per line.
     
     CRITICAL INSTRUCTION: GENERATE AS MANY CARDS AS POSSIBLE.
     Target: 30-50 cards for this text chunk. Do not summarize. Convert every fact into a card.
     
     Custom Preferences:
-    7. {length_instruction}
-    8. {density_instruction}
-    9. {highlight_instruction}
+    5. {length_instruction}
+    6. {density_instruction}
+    7. {highlight_instruction}
     {custom_instruction_str}
     """
 
