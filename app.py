@@ -11,12 +11,42 @@ from utils.data_processing import robust_csv_parse, push_card_to_anki
 from utils.rag import SimpleVectorStore
 import json
 
+# Versioning
+VERSION = "v2.3.0"
+
 # Page Config
 st.set_page_config(
-    page_title="Medical PDF to Anki",
+    page_title=f"Medical PDF to Anki {VERSION}",
     page_icon="🩺",
     layout="wide"
 )
+
+# Version Badge CSS
+st.markdown(f"""
+    <style>
+    .version-badge {{
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        background-color: rgba(0, 0, 0, 0.05);
+        color: rgba(0, 0, 0, 0.5);
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: bold;
+        z-index: 999999;
+        pointer-events: none;
+        font-family: 'Inter', sans-serif;
+        border: 1px solid rgba(0, 0, 0, 0.1);
+    }}
+    [data-theme="dark"] .version-badge {{
+        background-color: rgba(255, 255, 255, 0.1);
+        color: rgba(255, 255, 255, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }}
+    </style>
+    <div class="version-badge">{VERSION}</div>
+""", unsafe_allow_html=True)
 
 # Title
 st.title("🩺 Medical PDF to Anki Converter (AI-Powered)")
