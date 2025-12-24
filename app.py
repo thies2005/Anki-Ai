@@ -160,26 +160,16 @@ with col_gen:
                         
                         # Chapter Detection Option
                         if detect_chapters:
-                            progress_text.text(f"Analyzing TOC in {name}...")
-                            # 1. Get Front Matter
-                            front_matter = get_pdf_front_matter(f)
-                            # 2. Extract TOC
-                            toc_json_text = analyze_toc_with_gemini(front_matter, model_name=summary_model)
-                            try:
-                                toc_list = extract_json_from_text(toc_json_text)
-                            except:
-                                toc_list = []
+                            progress_text.text(f"Extracting text from {name}...")
+                            text = extract_text_from_pdf(f)
                             
-                            if toc_list:
-                                progress_text.text(f"Splitting {name} into {len(toc_list)} chapters...")
-                                try:
-                                    # 3. Split PDF by pages
-                                    # Ensure we rewind file stream inside the function or here
-                                    # extract_chapters_from_pdf does seek(0)
-                                    chapter_texts = extract_chapters_from_pdf(f, toc_list)
-                                except Exception as e:
-                                    st.error(f"Split failed: {e}")
-                                    chapter_texts = []
+                            progress_text.text(f"Detecting chapters in {name} using AI...")
+                            # Use text-based chapter detection with the summarizing model
+                            detected_chapters = detect_chapters_in_text(text, fname, model_name=summary_model)
+                            
+                            if detected_chapters:
+                                progress_text.text(f"Splitting {name} into {len(detected_chapters)} chapters...")
+                                chapter_texts = split_text_by_chapters(text, detected_chapters)
                                 
                                 if chapter_texts:
                                     # Successfully split into chapters
@@ -207,6 +197,7 @@ with col_gen:
                                             "parent_file": fname
                                         })
                                     continue  # Move to next file
+
                         
                         # Default: treat entire file as one chapter
                         progress_text.text(f"Processing full text of {name}...")
