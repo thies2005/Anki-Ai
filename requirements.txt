@@ -1,6 +1,6 @@
-streamlit
-google-genai
-pymupdf
+streamlit==1.41.1
+google-genai==0.3.0
+pymupdf>=1.25.0
 pandas
 python-dotenv
 openai

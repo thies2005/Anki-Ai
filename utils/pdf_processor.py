@@ -36,6 +36,13 @@ def extract_chapters_from_pdf(pdf_stream, ai_extracted_toc: list = None) -> list
     Extracts text per chapter based on PDF outline or AI-provided TOC.
     Returns: list of dicts {'title': str, 'text': str}
     """
+    def get_page_offset(doc):
+        # Scan first 50 pages to find one labeled "1"
+        for i in range(min(50, doc.page_count)):
+            if doc.load_page(i).get_label() == "1":
+                return i
+        return 0
+
     try:
         pdf_stream.seek(0)
         doc = fitz.open(stream=pdf_stream.read(), filetype="pdf")
@@ -66,6 +73,9 @@ def extract_chapters_from_pdf(pdf_stream, ai_extracted_toc: list = None) -> list
     chapters = []
     page_count = doc.page_count
     
+    # Calculate offset for Roman numeral prefaces
+    pdf_offset = get_page_offset(doc)
+    
     for i in range(len(toc)):
         item = toc[i]
         level = item[0]
@@ -83,10 +93,14 @@ def extract_chapters_from_pdf(pdf_stream, ai_extracted_toc: list = None) -> list
         else:
             end_page = page_count 
         
-        # Adjust for 0-based indexing
-        # TOC pages are 1-based
-        p_start = max(0, start_page - 1)
-        p_end = max(0, end_page - 1)
+        # Adjust for 0-based indexing AND PDF internal offset
+        # TOC pages are 1-based relative to the "logical" Page 1
+        p_start = max(0, pdf_offset + (start_page - 1))
+        
+        # For end page, we apply similar logic if it's based on logical numbering
+        # Note: end_page calc above was (next_start - 1). 
+        # So next_start matches next logical page.
+        p_end = max(0, pdf_offset + (end_page - 1))
         
         # Safety clamp
         if p_end >= page_count:
@@ -174,9 +188,8 @@ def recursive_character_text_splitter(text: str, chunk_size: int = 10000, overla
         
         # If overlap pushes us back to or before current start, just advance
         if next_start <= start:
-            next_start = start + chunk_size // 2 # Emergency advance
+            next_start = start + 1 # Ensure strictly forward progress, at least 1 char
             
-        start = max(start + 1, next_start) # Ensure we always advance at least 1 char (though the logic above handles it)
         start = next_start
 
     return chunks

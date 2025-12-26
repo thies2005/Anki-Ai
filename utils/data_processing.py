@@ -4,6 +4,29 @@ import csv
 from io import StringIO
 import requests
 import json
+import os
+
+def deduplicate_cards(new_cards: pd.DataFrame, existing_questions: list[str]) -> pd.DataFrame:
+    """
+    Filters out cards where the 'Front' is similar to existing questions.
+    Uses simple exact match or normalized match for now to avoid overhead.
+    """
+    if new_cards.empty or not existing_questions:
+        return new_cards
+        
+    # Normalize existing for comparison (lowercase, stripped)
+    existing_set = {q.lower().strip() for q in existing_questions}
+    
+    # Filter
+    unique_indices = []
+    for idx, row in new_cards.iterrows():
+        front = str(row['Front']).lower().strip()
+        if front not in existing_set:
+            unique_indices.append(idx)
+            # Add to local set to avoid dupes within the same batch
+            existing_set.add(front)
+            
+    return new_cards.loc[unique_indices]
 
 def push_card_to_anki(front: str, back: str, deck: str, tags: list = None) -> bool:
     """
@@ -35,7 +58,8 @@ def push_card_to_anki(front: str, back: str, deck: str, tags: list = None) -> bo
     }
     
     try:
-        response = requests.post("http://localhost:8765", json=payload, timeout=2)
+        anki_url = os.getenv("ANKI_CONNECT_URL", "http://localhost:8765")
+        response = requests.post(anki_url, json=payload, timeout=2)
         result = response.json()
         if result.get("error") is None:
             return True

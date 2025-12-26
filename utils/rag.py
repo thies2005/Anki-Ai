@@ -7,7 +7,7 @@ class SimpleVectorStore:
     def __init__(self):
         self.chunks = [] # List of {"text": str, "metadata": dict, "embedding": np.array}
     
-    def add_chunks(self, chunks: list[str], metadata_list: list[dict] = None):
+    def add_chunks(self, chunks: list[str], google_client, metadata_list: list[dict] = None):
         """
         Adds text chunks to the store. 
         Note: This processes embeddings serially and might be slow for very large docs.
@@ -15,11 +15,19 @@ class SimpleVectorStore:
         if not metadata_list:
             metadata_list = [{}] * len(chunks)
             
+        # OOM Protection: Limit total chunks
+        if len(self.chunks) + len(chunks) > 5000:
+            print("Warning: Vector Store capacity reached (5000 chunks). Truncating.")
+            remaining_slots = 5000 - len(self.chunks)
+            if remaining_slots <= 0: return
+            chunks = chunks[:remaining_slots]
+            metadata_list = metadata_list[:remaining_slots]
+
         for i, text in enumerate(chunks):
             # optimization: skip very short chunks
             if len(text) < 50: continue
             
-            emb = get_embedding(text) # Uses strict call to llm_handler
+            emb = get_embedding(text, google_client=google_client) 
             if emb:
                 self.chunks.append({
                     "text": text,
@@ -27,14 +35,14 @@ class SimpleVectorStore:
                     "embedding": np.array(emb, dtype=np.float32)
                 })
                 
-    def search(self, query: str, k: int = 5) -> list[dict]:
+    def search(self, query: str, google_client, k: int = 5) -> list[dict]:
         """
         Returns top k chunks matching the query.
         """
         if not self.chunks:
             return []
             
-        query_emb = get_embedding(query)
+        query_emb = get_embedding(query, google_client=google_client)
         if not query_emb:
             return []
             

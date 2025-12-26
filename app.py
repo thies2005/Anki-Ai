@@ -7,12 +7,12 @@ from dotenv import load_dotenv
 load_dotenv()
 from utils.pdf_processor import extract_text_from_pdf, clean_text, recursive_character_text_splitter, get_pdf_front_matter, extract_chapters_from_pdf
 from utils.llm_handler import configure_gemini, configure_openrouter, process_chunk, get_chat_response, sort_files_with_gemini, generate_chapter_summary, generate_full_summary, detect_chapters_in_text, split_text_by_chapters, analyze_toc_with_gemini, extract_json_from_text
-from utils.data_processing import robust_csv_parse, push_card_to_anki
+from utils.data_processing import robust_csv_parse, push_card_to_anki, deduplicate_cards
 from utils.rag import SimpleVectorStore
 import json
 
 # Versioning
-VERSION = "v2.4.2"
+VERSION = "v2.5.0"
 
 # Page Config
 st.set_page_config(
@@ -58,6 +58,12 @@ with st.sidebar:
     # Provider Selection
     provider = st.radio("AI Provider", ["Google Gemini", "OpenRouter"], index=0)
     
+    # Initialize session state for clients if not present
+    if "google_client" not in st.session_state:
+        st.session_state.google_client = None
+    if "openrouter_client" not in st.session_state:
+        st.session_state.openrouter_client = None
+
     api_key = None
     
     if provider == "Google Gemini":
@@ -74,17 +80,17 @@ with st.sidebar:
         # Init Google Client
         if user_api_key:
             api_key = user_api_key
-            configure_gemini(api_key, fallback_keys=fallback_keys)
+            st.session_state.google_client = configure_gemini(api_key, fallback_keys=fallback_keys)
             st.success(f"Custom Gemini Key Configured! (+{len(fallback_keys)} backups)")
         else:
             if fallback_keys:
                 api_key = fallback_keys[0]
-                configure_gemini(api_key, fallback_keys=fallback_keys[1:])
+                st.session_state.google_client = configure_gemini(api_key, fallback_keys=fallback_keys[1:])
                 st.info(f"Using Fallback Gemini Key (Dev Mode)")
             else:
                 st.error("No Gemini Keys found.")
                 api_key = None
-                configure_gemini(None, fallback_keys=[])
+                st.session_state.google_client = configure_gemini(None, fallback_keys=[])
 
         # Google Models
         model_options = {
@@ -101,19 +107,19 @@ with st.sidebar:
         
         if user_api_key:
             api_key = user_api_key
-            configure_openrouter(api_key)
+            st.session_state.openrouter_client = configure_openrouter(api_key)
             st.success("OpenRouter Key Configured!")
         else:
             # Check env
             env_key = os.getenv("OPENROUTER_API_KEY")
             if env_key:
                 api_key = env_key
-                configure_openrouter(api_key)
+                st.session_state.openrouter_client = configure_openrouter(api_key)
                 st.info("Using OpenRouter Key from Environment")
             else:
                 st.error("OpenRouter Key missing.")
                 api_key = None
-                configure_openrouter(None)
+                st.session_state.openrouter_client = configure_openrouter(None)
 
         model_options = {
             "xiaomi/mimo-v2-flash:free": "Xiaomi Mimo V2 Flash (Free)",
@@ -204,7 +210,7 @@ with col_gen:
                             
                             progress_text.text(f"Detecting chapters in {name} using AI...")
                             # Use text-based chapter detection with the normal model (same as Anki cards)
-                            detected_chapters = detect_chapters_in_text(text, fname, model_name=model_name)
+                            detected_chapters = detect_chapters_in_text(text, fname, google_client=st.session_state.google_client, openrouter_client=st.session_state.openrouter_client, model_name=model_name)
                             
                             if detected_chapters:
                                 progress_text.text(f"Splitting {name} into {len(detected_chapters)} chapters...")
@@ -221,13 +227,13 @@ with col_gen:
                                         
                                         # Generate summary
                                         try:
-                                            ch_summary = generate_chapter_summary(ch_text_cleaned, model_name=summary_model)
+                                            ch_summary = generate_chapter_summary(ch_text_cleaned, google_client=st.session_state.google_client, openrouter_client=st.session_state.openrouter_client, model_name=summary_model)
                                         except:
                                             ch_summary = "(Summary generation failed)"
                                         
                                         # Index for RAG
                                         chunks = recursive_character_text_splitter(ch_text_cleaned, chunk_size=2000)
-                                        st.session_state.vector_store.add_chunks(chunks, metadata_list=[{"source": f"{fname} - {ch_title}"}]*len(chunks))
+                                        st.session_state.vector_store.add_chunks(chunks, google_client=st.session_state.google_client, metadata_list=[{"source": f"{fname} - {ch_title}"}]*len(chunks))
                                         
                                         file_chapters.append({
                                             "title": f"{fname} - {ch_title}",
@@ -245,10 +251,10 @@ with col_gen:
                         
                         # Index for RAG
                         chunks = recursive_character_text_splitter(cleaned_text, chunk_size=2000)
-                        st.session_state.vector_store.add_chunks(chunks, metadata_list=[{"source": fname}]*len(chunks))
+                        st.session_state.vector_store.add_chunks(chunks, google_client=st.session_state.google_client, metadata_list=[{"source": fname}]*len(chunks))
 
                         try:
-                            summary = generate_chapter_summary(cleaned_text, model_name=summary_model)
+                            summary = generate_chapter_summary(cleaned_text, google_client=st.session_state.google_client, openrouter_client=st.session_state.openrouter_client, model_name=summary_model)
                         except:
                             summary = "(Summary generation failed)"
                         
@@ -295,9 +301,9 @@ with col_gen:
                             provider_code = "google" if provider == "Google Gemini" else "openrouter"
                             with st.spinner("Thinking (RAG)..."):
                                 # RAG Retrieval
-                                context_text = ""
+                                    context_text = ""
                                 if 'vector_store' in st.session_state:
-                                    relevant_chunks = st.session_state.vector_store.search(pdf_prompt, k=5)
+                                    relevant_chunks = st.session_state.vector_store.search(pdf_prompt, google_client=st.session_state.google_client, k=5)
                                     context_text = "\n\n".join([c['text'] for c in relevant_chunks])
                                 else:
                                     # Fallback to full context if store missing
@@ -308,6 +314,8 @@ with col_gen:
                                     context_text, 
                                     provider_code, 
                                     model_name,
+                                    google_client=st.session_state.google_client,
+                                    openrouter_client=st.session_state.openrouter_client,
                                     direct_chat=False
                                 )
                             st.markdown(response)
@@ -342,6 +350,8 @@ with col_gen:
                             
                             csv_chunk = process_chunk(
                                 chunk, 
+                                google_client=st.session_state.google_client,
+                                openrouter_client=st.session_state.openrouter_client,
                                 provider=provider_code,
                                 model_name=model_name,
                                 card_length=card_length,
@@ -356,7 +366,11 @@ with col_gen:
                                 try:
                                     df_chunk = robust_csv_parse(csv_chunk)
                                     if not df_chunk.empty:
-                                         # Track generated questions for anti-duplication
+                                         # Deduplicate against existing questions
+                                         df_chunk = deduplicate_cards(df_chunk, st.session_state['generated_questions'])
+                                         
+                                    if not df_chunk.empty:
+                                         # Track generated questions for future anti-duplication
                                          new_questions = df_chunk["Front"].tolist()
                                          st.session_state['generated_questions'].extend(new_questions)
                                     
@@ -439,6 +453,8 @@ with col_gen:
                             provider_code = "google" if provider == "Google Gemini" else "openrouter"
                             csv_text = process_chunk(
                                 ch['text'], 
+                                google_client=st.session_state.google_client,
+                                openrouter_client=st.session_state.openrouter_client,
                                 provider=provider_code,
                                 model_name=model_name,
                                 card_length=card_length,
@@ -527,6 +543,8 @@ if show_general_chat and col_chat is not None:
                             "",  # No context for general chat
                             provider_code, 
                             model_name,
+                            google_client=st.session_state.google_client,
+                            openrouter_client=st.session_state.openrouter_client,
                             direct_chat=True
                         )
                     st.markdown(response)

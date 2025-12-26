@@ -3,40 +3,44 @@ from google.genai import types
 import os
 import openai
 
-# Global client holders
-_PRIMARY_CLIENT = None
-_FALLBACK_CLIENTS = []
-_OPENROUTER_CLIENT = None
+from google import genai
+from google.genai import types
+import os
+import openai
 
 def configure_gemini(api_key: str, fallback_keys: list = None):
-    """Configures the Gemini API with provided primary and fallback keys."""
-    global _PRIMARY_CLIENT, _FALLBACK_CLIENTS
+    """
+    Configures the Gemini API.
+    Returns: dictionary containing 'primary' and 'fallbacks' clients.
+    """
+    clients = {
+        "primary": None,
+        "fallbacks": []
+    }
     
-    # FIX: Only initialize if api_key is not empty
     if api_key and api_key.strip():
-        _PRIMARY_CLIENT = genai.Client(api_key=api_key)
-    else:
-        _PRIMARY_CLIENT = None
+        clients["primary"] = genai.Client(api_key=api_key)
         
-    _FALLBACK_CLIENTS = []
     if fallback_keys:
         for key in fallback_keys:
             if key and key.strip():
                  try:
-                    _FALLBACK_CLIENTS.append(genai.Client(api_key=key))
+                    clients["fallbacks"].append(genai.Client(api_key=key))
                  except: 
                     pass
+    return clients
 
 def configure_openrouter(api_key: str):
-    """Configures the OpenRouter API."""
-    global _OPENROUTER_CLIENT
+    """
+    Configures the OpenRouter API.
+    Returns: OpenRouter client instance or None.
+    """
     if api_key and api_key.strip():
-        _OPENROUTER_CLIENT = openai.OpenAI(
+        return openai.OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=api_key,
         )
-    else:
-        _OPENROUTER_CLIENT = None
+    return None
 
 import time
 
@@ -53,13 +57,15 @@ def rate_limit_delay(model_name: str):
         delay = 1.0 
     time.sleep(delay)
 
-def _generate_with_retry(model_name: str, contents, config, fallback_to_flash_lite: bool = True):
+def _generate_with_retry(model_name: str, contents, config, client_config: dict, fallback_to_flash_lite: bool = True):
     """
     Centralized generation with Key Rotation (Primary -> Fallbacks) and Model Fallback.
+    client_config: dict returned from configuration {"primary": ..., "fallbacks": [...]}
     """
-    global _PRIMARY_CLIENT, _FALLBACK_CLIENTS
+    primary_client = client_config.get("primary")
+    fallback_clients = client_config.get("fallbacks", [])
     
-    if not _PRIMARY_CLIENT:
+    if not primary_client:
          raise ValueError("Google API Key not configured.")
         
     rate_limit_delay(model_name)
@@ -86,14 +92,14 @@ def _generate_with_retry(model_name: str, contents, config, fallback_to_flash_li
     for current_model in models_to_try:
         # Try Primary Key for this model
         try:
-            return attempt(_PRIMARY_CLIENT, current_model)
+            return attempt(primary_client, current_model)
         except Exception as e:
             err_str = str(e)
             errors.append(f"Model {current_model} (Primary Key) Error: {err_str}")
             
             # If rate limited (429) or other retryable error, try fallback keys
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "503" in err_str:
-                for idx, client in enumerate(_FALLBACK_CLIENTS):
+                for idx, client in enumerate(fallback_clients):
                     try:
                         time.sleep(1) # Brief pause before switching
                         return attempt(client, current_model)
@@ -101,17 +107,12 @@ def _generate_with_retry(model_name: str, contents, config, fallback_to_flash_li
                         errors.append(f"Model {current_model} (Fallback Key {idx+1}) Error: {str(e2)}")
                         continue # Try next key
             
-            # If it's not a 429/retryable error on primary key, don't try other keys for this model?
-            # Actually, usually safer to try all keys anyway, but if it's a 400 (Bad Request), keys won't help.
-            # However, for 429, we definitely want to try other keys.
-            
     # If we got here, everything failed.
     raise Exception(f"All attempts failed. Errors: {'; '.join(errors)}")
 
-def _generate_with_openrouter(model_name: str, system_instruction: str, user_content: str):
+def _generate_with_openrouter(model_name: str, system_instruction: str, user_content: str, client):
     """Generates content using OpenRouter with 429 fallback to other free models."""
-    global _OPENROUTER_CLIENT
-    if not _OPENROUTER_CLIENT:
+    if not client:
         raise ValueError("OpenRouter API Key not configured.")
 
     # List of free models to try if the primary one fails with 429
@@ -135,7 +136,7 @@ def _generate_with_openrouter(model_name: str, system_instruction: str, user_con
             rate_limit_delay(current_model)
             if errors:
                 time.sleep(1) # Extra pause between different model attempts
-            response = _OPENROUTER_CLIENT.chat.completions.create(
+            response = client.chat.completions.create(
                 model=current_model,
                 messages=[
                     {"role": "system", "content": system_instruction},
@@ -158,7 +159,7 @@ def _generate_with_openrouter(model_name: str, system_instruction: str, user_con
 
     raise Exception(f"All OpenRouter models failed. Errors: {'; '.join(errors[-3:])}")
 
-def get_chat_response(messages: list, context: str, provider: str, model_name: str, direct_chat: bool = False) -> str:
+def get_chat_response(messages: list, context: str, provider: str, model_name: str, google_client=None, openrouter_client=None, direct_chat: bool = False) -> str:
     """
     Handles chat interaction.
     If direct_chat=True, it chats with the model directly without document context.
@@ -178,8 +179,8 @@ def get_chat_response(messages: list, context: str, provider: str, model_name: s
         """
     
     if provider == "google":
-        global _PRIMARY_CLIENT
-        if not _PRIMARY_CLIENT: return "Error: Google Client not configured."
+        client_config = google_client
+        if not client_config or not client_config.get("primary"): return "Error: Google Client not configured."
         
         # Convert messages to Gemini format (user/model)
         gemini_hist = []
@@ -193,17 +194,13 @@ def get_chat_response(messages: list, context: str, provider: str, model_name: s
         )
         
         try:
-            # We use generate_content with the full history as contents, or chat session?
-            # Unified generate_content is stateless-ish but we can pass list of contents.
-            # But generate_content expects list of Content objects.
-            response = _generate_with_retry(model_name, gemini_hist, config, fallback_to_flash_lite=True)
+            response = _generate_with_retry(model_name, gemini_hist, config, client_config, fallback_to_flash_lite=True)
             return response.text
         except Exception as e:
             return f"Chat Error: {e}"
 
     elif provider == "openrouter":
-        global _OPENROUTER_CLIENT
-        if not _OPENROUTER_CLIENT: return "Error: OpenRouter Client not configured."
+        if not openrouter_client: return "Error: OpenRouter Client not configured."
         
         rate_limit_delay(model_name)
         
@@ -212,7 +209,7 @@ def get_chat_response(messages: list, context: str, provider: str, model_name: s
         full_messages = [{"role": "system", "content": system_prompt}] + messages
         
         try:
-            response = _OPENROUTER_CLIENT.chat.completions.create(
+            response = openrouter_client.chat.completions.create(
                 model=model_name,
                 messages=full_messages,
                 temperature=0.7
@@ -223,13 +220,15 @@ def get_chat_response(messages: list, context: str, provider: str, model_name: s
     
     return "Error: Invalid Provider"
 
-def get_embedding(text: str, provider: str = "google", model_name: str = "text-embedding-004") -> list:
+def get_embedding(text: str, provider: str = "google", model_name: str = "text-embedding-004", google_client=None) -> list:
     """Generates an embedding vector for the given text."""
     try:
         if provider == "google":
-            global _PRIMARY_CLIENT
-            if not _PRIMARY_CLIENT: return []
-            result = _PRIMARY_CLIENT.models.embed_content(
+            client_config = google_client
+            if not client_config or not client_config.get("primary"): return []
+            primary_client = client_config["primary"]
+            
+            result = primary_client.models.embed_content(
                 model=model_name,
                 contents=text
             )
@@ -242,7 +241,7 @@ def get_embedding(text: str, provider: str = "google", model_name: str = "text-e
         return []
 
 
-def process_chunk(text_chunk: str, provider: str = "google", model_name: str = "gemini-3-flash", card_length: str = "Medium (Standard)", card_density: str = "Normal", enable_highlighting: bool = False, custom_prompt: str = "", formatting_mode: str = "Markdown/HTML", existing_topics: list[str] = None) -> str:
+def process_chunk(text_chunk: str, google_client=None, openrouter_client=None, provider: str = "google", model_name: str = "gemini-3-flash", card_length: str = "Medium (Standard)", card_density: str = "Normal", enable_highlighting: bool = False, custom_prompt: str = "", formatting_mode: str = "Markdown/HTML", existing_topics: list[str] = None) -> str:
     """
     Sends a text chunk to the selected Provider/Model and retrieves Anki CSV cards.
     formatting_mode: "Plain Text", "Markdown/HTML", or "LaTeX/KaTeX"
@@ -287,8 +286,9 @@ def process_chunk(text_chunk: str, provider: str = "google", model_name: str = "
     
     anti_dupe_instruction = ""
     if existing_topics:
-        # Keep last 50 to avoid prompt bloat
-        topics_str = "; ".join(existing_topics[-50:]) 
+        # Optimization: Only show very recent topics to guide style, rely on post-processing for strict dedupe
+        # showing last 10 instead of 50
+        topics_str = "; ".join(existing_topics[-10:]) 
         anti_dupe_instruction = f"9. ANTI-DUPLICATE: The following concepts have ALREADY been generated. Do NOT create cards for them: [{topics_str}]"
     
     system_instruction = f"""You are a world-class Anki flashcard creator that helps students create flashcards that help them remember facts, concepts, and ideas from videos. You will be given a video or document or snippet.
@@ -318,10 +318,10 @@ def process_chunk(text_chunk: str, provider: str = "google", model_name: str = "
                 temperature=0.2,
                 max_output_tokens=65536,
             )
-            response = _generate_with_retry(model_name, text_chunk, config, fallback_to_flash_lite=True)
+            response = _generate_with_retry(model_name, text_chunk, config, google_client, fallback_to_flash_lite=True)
             text_resp = response.text
         elif provider == "openrouter":
-            text_resp = _generate_with_openrouter(model_name, system_instruction, text_chunk)
+            text_resp = _generate_with_openrouter(model_name, system_instruction, text_chunk, openrouter_client)
         else:
              return "Error: Invalid Provider Selected"
         
@@ -353,10 +353,10 @@ def process_chunk(text_chunk: str, provider: str = "google", model_name: str = "
     except Exception as e:
         return f"Error processing chunk: {str(e)}"
 
-# Keep older alias for compatibility if needed, or update app.py
-process_chunk_with_gemini = lambda *args, **kwargs: process_chunk(*args, provider="google", **kwargs)
+# Legacy alias removal or update if strictly needed, but better to update calls.
+# process_chunk_with_gemini = ... (Removing to encourage proper usage)
 
-def analyze_toc_with_gemini(toc_text: str, model_name: str = "gemini-2.5-flash-lite") -> str:
+def analyze_toc_with_gemini(toc_text: str, google_client, model_name: str = "gemini-2.5-flash-lite") -> str:
     """Extracts chapter structure from text using Gemini."""
     prompt = f"""You are a PDF Structure Analyzer. 
     Analyze the following text (which contains the Table of Contents of a medical textbook) and extract the hierarchical chapters.
@@ -382,13 +382,14 @@ def analyze_toc_with_gemini(toc_text: str, model_name: str = "gemini-2.5-flash-l
             model_name, 
             prompt, 
             types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1),
+            google_client,
             fallback_to_flash_lite=False
         )
         return response.text
     except Exception as e:
         return f"Error analyzing TOC: {str(e)}"
 
-def sort_files_with_gemini(file_names: list[str], model_name: str = "gemma-3-27b-it") -> list[str]:
+def sort_files_with_gemini(file_names: list[str], google_client=None, openrouter_client=None, model_name: str = "gemma-3-27b-it") -> list[str]:
     """Sorts a list of filenames logically. Supports Google and OpenRouter."""
     prompt = f"""Sort the following list of filenames in the most logical chronological or numerical order (e.g. Lecture 1 before Lecture 2, Chapter 1 before 10).
     
@@ -404,13 +405,14 @@ def sort_files_with_gemini(file_names: list[str], model_name: str = "gemma-3-27b
         if "/" in model_name:
             # OpenRouter
             system_instruction = "You are a File Organizer. Output strictly valid JSON."
-            resp_text = _generate_with_openrouter(model_name, system_instruction, prompt)
+            resp_text = _generate_with_openrouter(model_name, system_instruction, prompt, openrouter_client)
         else:
             # Google
             response = _generate_with_retry(
                 model_name,
                 prompt,
                 types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0),
+                google_client,
                 fallback_to_flash_lite=False 
             )
             resp_text = response.text
@@ -422,7 +424,7 @@ def sort_files_with_gemini(file_names: list[str], model_name: str = "gemma-3-27b
     except:
         return file_names
 
-def generate_chapter_summary(text_chunk: str, model_name: str = "gemma-3-27b-it") -> str:
+def generate_chapter_summary(text_chunk: str, google_client=None, openrouter_client=None, model_name: str = "gemma-3-27b-it") -> str:
     """Generates a brief summary of a chapter. Supports Google and OpenRouter."""
     input_text = text_chunk[:30000] 
     
@@ -432,20 +434,21 @@ def generate_chapter_summary(text_chunk: str, model_name: str = "gemma-3-27b-it"
         if "/" in model_name:
             # OpenRouter
             system_instruction = "You are a Medical Text Summarizer. Be concise and focus on high-yield medical facts."
-            return _generate_with_openrouter(model_name, system_instruction, prompt)
+            return _generate_with_openrouter(model_name, system_instruction, prompt, openrouter_client)
         else:
             # Google/Gemini
             response = _generate_with_retry(
                 model_name,
                 prompt,
                 types.GenerateContentConfig(temperature=0.2),
+                google_client,
                 fallback_to_flash_lite=True
             )
             return response.text
     except Exception as e:
         return f"Summary failed: {str(e)}"
 
-def generate_full_summary(chapter_summaries: list[str], model_name: str = "gemma-3-27b-it") -> str:
+def generate_full_summary(chapter_summaries: list[str], google_client=None, openrouter_client=None, model_name: str = "gemma-3-27b-it") -> str:
     """Aggregates chapter summaries into a document abstract. Supports Google and OpenRouter."""
     joined_summaries = "\n- ".join(chapter_summaries)
     prompt = f"Create a coherent summary/abstract of the entire document based on these chapter summaries:\n\n- {joined_summaries}"
@@ -454,20 +457,21 @@ def generate_full_summary(chapter_summaries: list[str], model_name: str = "gemma
         if "/" in model_name:
             # OpenRouter
             system_instruction = "You are a Medical Literature Abstractor."
-            return _generate_with_openrouter(model_name, system_instruction, prompt)
+            return _generate_with_openrouter(model_name, system_instruction, prompt, openrouter_client)
         else:
             # Google
             response = _generate_with_retry(
                 model_name,
                 prompt,
                 types.GenerateContentConfig(temperature=0.2),
+                google_client,
                 fallback_to_flash_lite=True
             )
             return response.text
     except Exception as e:
         return f"Full summary failed: {str(e)}"
 
-def detect_chapters_in_text(text: str, file_name: str, model_name: str = "gemma-3-27b-it") -> list:
+def detect_chapters_in_text(text: str, file_name: str, google_client=None, openrouter_client=None, model_name: str = "gemma-3-27b-it") -> list:
     """
     Detects chapters within a text document using AI.
     Returns: [{"title": "Chapter 1 Name", "description": "..."}, ...]
@@ -502,13 +506,14 @@ Rules:
         if "/" in model_name:
             # OpenRouter
             system_instruction = "You are a Document Chapter Analyzer. Output strictly valid JSON."
-            resp_text = _generate_with_openrouter(model_name, system_instruction, prompt)
+            resp_text = _generate_with_openrouter(model_name, system_instruction, prompt, openrouter_client)
         else:
             # Google
             response = _generate_with_retry(
                 model_name,
                 prompt,
                 types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1),
+                google_client,
                 fallback_to_flash_lite=True
             )
             resp_text = response.text
