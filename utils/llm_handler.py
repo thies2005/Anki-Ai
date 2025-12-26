@@ -3,10 +3,6 @@ from google.genai import types
 import os
 import openai
 
-from google import genai
-from google.genai import types
-import os
-import openai
 
 def configure_gemini(api_key: str, fallback_keys: list = None):
     """

@@ -415,7 +415,7 @@ with col_gen:
                     st.error(f"Error: {e}")
 
             if 'result_df' in st.session_state:
-                st.dataframe(st.session_state['result_df'], width='stretch')
+                st.dataframe(st.session_state['result_df'], use_container_width=True)
                 
                 col_dl, col_push = st.columns(2)
                 with col_dl:

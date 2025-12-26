@@ -58,7 +58,9 @@ def push_card_to_anki(front: str, back: str, deck: str, tags: list = None) -> bo
     }
     
     try:
-        anki_url = os.getenv("ANKI_CONNECT_URL", "http://localhost:8765")
+        # Default to host.docker.internal for Docker compatibility
+        # For local runs without Docker, set ANKI_CONNECT_URL=http://localhost:8765
+        anki_url = os.getenv("ANKI_CONNECT_URL", "http://host.docker.internal:8765")
         response = requests.post(anki_url, json=payload, timeout=2)
         result = response.json()
         if result.get("error") is None:

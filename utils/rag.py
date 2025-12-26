@@ -37,7 +37,7 @@ class SimpleVectorStore:
                 
     def search(self, query: str, google_client, k: int = 5) -> list[dict]:
         """
-        Returns top k chunks matching the query.
+        Returns top k chunks matching the query using vectorized cosine similarity.
         """
         if not self.chunks:
             return []
@@ -51,24 +51,26 @@ class SimpleVectorStore:
         
         if q_norm == 0:
             return []
-            
-        scores = []
-        for chunk in self.chunks:
-            c_vec = chunk["embedding"]
-            c_norm = np.linalg.norm(c_vec)
-            
-            if c_norm == 0:
-                score = 0
-            else:
-                score = np.dot(q_vec, c_vec) / (q_norm * c_norm)
-            
-            scores.append((score, chunk))
-            
-        # Sort by score descending
-        scores.sort(key=lambda x: x[0], reverse=True)
         
-        # Return just the chunks
-        return [s[1] for s in scores[:k]]
+        # Vectorized: Build matrix of all embeddings
+        embeddings_matrix = np.array([c["embedding"] for c in self.chunks], dtype=np.float32)
+        
+        # Compute all dot products at once
+        dot_products = np.dot(embeddings_matrix, q_vec)
+        
+        # Compute norms for all chunk vectors
+        norms = np.linalg.norm(embeddings_matrix, axis=1)
+        
+        # Avoid division by zero
+        norms[norms == 0] = 1e-10
+        
+        # Cosine similarity scores
+        scores = dot_products / (norms * q_norm)
+        
+        # Get top k indices
+        top_indices = np.argsort(scores)[::-1][:k]
+        
+        return [self.chunks[i] for i in top_indices]
         
     def clear(self):
         self.chunks = []
