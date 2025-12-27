@@ -258,7 +258,8 @@ def process_chunk(text_chunk: str, google_client=None, openrouter_client=None, p
     elif "High" in card_density:
         density_instruction = "Rule: DENSITY = HIGH. Generate comprehensive cards covering EVERY detail, mechanism, and fact in the text."
     else:
-        density_instruction = "Rule: DENSITY = EXTREME. Goal: Extract 20-50+ cards per chunk. Cover EVERY distinct fact, number, and mechanism."
+        # Normal density - balanced card generation
+        density_instruction = "Rule: DENSITY = NORMAL. Generate cards for main ideas and key supporting details. Avoid trivial facts. Target 5-15 cards per chunk."
 
     highlight_instruction = ""
     
