@@ -6,7 +6,9 @@ import pandas as pd
 import logging
 from utils.pdf_processor import extract_text_from_pdf, clean_text, recursive_character_text_splitter
 from utils.llm_handler import process_chunk, generate_chapter_summary, detect_chapters_in_text, split_text_by_chapters
-from utils.data_processing import robust_csv_parse, push_card_to_anki, deduplicate_cards, check_ankiconnect
+from utils.data_processing import robust_csv_parse, push_card_to_anki, deduplicate_cards, check_ankiconnect, format_cards_for_ankiconnect
+import streamlit.components.v1 as components
+import json
 from utils.rag import SQLiteVectorStore
 
 logger = logging.getLogger(__name__)
@@ -248,12 +250,12 @@ def render_generator(config):
             if 'result_df' in st.session_state:
                 st.dataframe(st.session_state['result_df'], use_container_width=True)
                 
-                col_dl, col_push = st.columns(2)
+                col_dl, col_push, col_browser = st.columns(3)
                 with col_dl:
                      st.download_button("Download anki_cards.txt", st.session_state['result_csv'], "anki_cards.txt", "text/plain")
                 
                 with col_push:
-                     if st.button("🚀 Push to Anki (AnkiConnect)"):
+                     if st.button("🚀 Push (via Server)", help="Uses tunnel if on Cloud, or direct if local."):
                          # Get URL from session state
                          anki_url = st.session_state.get('anki_connect_url', 'http://localhost:8765')
                          
@@ -277,6 +279,42 @@ def render_generator(config):
                                  st.success(f"Pushed {success_count}/{total} cards!")
                              else:
                                  st.warning("Cards were not added. They may already exist in the deck.")
+                
+                with col_browser:
+                    if st.button("🌐 Direct Browser Push", help="Works from Cloud without a tunnel. Requires AnkiConnect CORS set to '*'"):
+                        notes = format_cards_for_ankiconnect(st.session_state['result_df'])
+                        notes_json = json.dumps(notes)
+                        
+                        js_code = f"""
+                        <script>
+                        async function pushToAnki() {{
+                            const notes = {notes_json};
+                            const payload = {{
+                                "action": "addNotes",
+                                "version": 6,
+                                "params": {{ "notes": notes }}
+                            }};
+                            try {{
+                                const response = await fetch('http://localhost:8765', {{
+                                    method: 'POST',
+                                    body: JSON.stringify(payload),
+                                    headers: {{ 'Content-Type': 'application/json' }}
+                                }});
+                                const result = await response.json();
+                                if (result.error) {{
+                                    alert('AnkiConnect Error: ' + result.error);
+                                }} else {{
+                                    const successCount = result.result.filter(id => id !== null).length;
+                                    alert('Successfully pushed ' + successCount + ' cards via Browser!');
+                                }}
+                            }} catch (err) {{
+                                alert('Failed to connect to Local Anki. Ensure Anki is open and CORS is set to "*" in AnkiConnect config.');
+                            }}
+                        }}
+                        pushToAnki();
+                        </script>
+                        """
+                        components.html(js_code, height=0)
             
             st.divider()
             
@@ -330,12 +368,12 @@ def render_generator(config):
                         
                         st.dataframe(df_s)
                         
-                        col_single_dl, col_single_push = st.columns(2)
+                        col_single_dl, col_single_push, col_single_browser = st.columns(3)
                         with col_single_dl:
                             st.download_button(f"Download {ch['title']}.txt", csv_s, f"{ch['title']}.txt", "text/plain", key=f"dl_btn_{idx}")
                         
                         with col_single_push:
-                            if st.button(f"🚀 Push {ch['title']} to Anki", key=f"push_btn_{idx}"):
+                            if st.button(f"🚀 Push (Server)", key=f"push_btn_{idx}"):
                                 anki_url = st.session_state.get('anki_connect_url', 'http://localhost:8765')
                                 is_reachable, msg = check_ankiconnect(anki_url)
                                 if not is_reachable:
@@ -355,6 +393,42 @@ def render_generator(config):
                                         st.success(f"Pushed {success_count}/{total} cards!")
                                     else:
                                         st.warning("Cards were not added. They may already exist in the deck.")
+                        
+                        with col_single_browser:
+                            if st.button(f"🌐 Push (Browser)", key=f"browser_push_btn_{idx}"):
+                                notes = format_cards_for_ankiconnect(df_s)
+                                notes_json = json.dumps(notes)
+                                
+                                js_code = f"""
+                                <script>
+                                async function pushToAnkiSingle() {{
+                                    const notes = {notes_json};
+                                    const payload = {{
+                                        "action": "addNotes",
+                                        "version": 6,
+                                        "params": {{ "notes": notes }}
+                                    }};
+                                    try {{
+                                        const response = await fetch('http://localhost:8765', {{
+                                            method: 'POST',
+                                            body: JSON.stringify(payload),
+                                            headers: {{ 'Content-Type': 'application/json' }}
+                                        }});
+                                        const result = await response.json();
+                                        if (result.error) {{
+                                            alert('AnkiConnect Error: ' + result.error);
+                                        }} else {{
+                                            const successCount = result.result.filter(id => id !== null).length;
+                                            alert('Successfully pushed ' + successCount + ' cards for {ch['title']} via Browser!');
+                                        }}
+                                    }} catch (err) {{
+                                        alert('Failed to connect to Local Anki. Ensure Anki is open and CORS is set to "*" in AnkiConnect config.');
+                                    }}
+                                }}
+                                pushToAnkiSingle();
+                                </script>
+                                """
+                                components.html(js_code, height=0)
                     
                     if new_title != ch['title']:
                         st.session_state['chapters_data'][idx]['title'] = new_title

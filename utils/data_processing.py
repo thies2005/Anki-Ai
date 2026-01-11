@@ -109,6 +109,27 @@ def push_card_to_anki(front: str, back: str, deck: str, tags: list = None, anki_
         logger.error(f"Unexpected error pushing to Anki: {e}")
         return False
 
+def format_cards_for_ankiconnect(df: pd.DataFrame) -> list:
+    """
+    Formats a DataFrame of cards into the list of notes expected by AnkiConnect's addNotes.
+    """
+    notes = []
+    for _, row in df.iterrows():
+        notes.append({
+            "deckName": str(row['Deck']),
+            "modelName": "Basic",
+            "fields": {
+                "Front": str(row['Front']),
+                "Back": str(row['Back'])
+            },
+            "options": {
+                "allowDuplicate": False,
+                "duplicateScope": "deck"
+            },
+            "tags": [str(row['Tag'])] if row['Tag'] else []
+        })
+    return notes
+
 def robust_csv_parse(csv_text: str) -> pd.DataFrame:
     """
     Parses LLM-generated CSV/TSV text more robustly than pd.read_csv.
