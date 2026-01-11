@@ -102,6 +102,25 @@ FALLBACK_KEY_1=optional_backup_key
 3. Select your downloaded `.txt` file
 4. Anki auto-detects the format via headers
 
+### Direct Browser Push (New!)
+
+Push cards directly to Anki from the web app—no file downloads needed!
+
+**One-time Setup:**
+1. In Anki, go to `Tools > Add-ons`
+2. Select **AnkiConnect** and click **Config**
+3. Change `"webCorsOriginList": ["http://localhost"]` to:
+   ```json
+   "webCorsOriginList": ["*"]
+   ```
+4. Restart Anki
+
+**Usage:**
+- Click the **"🌐 Direct Browser Push"** button in the app
+- Cards are sent directly to your running Anki instance
+
+> **Note:** This works from Streamlit Cloud because the push happens in your browser, which can reach `localhost`.
+
 ---
 
 ## 🎛️ Settings

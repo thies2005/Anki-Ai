@@ -282,6 +282,15 @@ def render_generator(config):
                 
                 with col_browser:
                     if st.button("🌐 Direct Browser Push", help="Works from Cloud without a tunnel. Requires AnkiConnect CORS set to '*'"):
+                        # Show setup instructions
+                        st.info("""
+**⚠️ First-Time Setup Required:**
+1. In Anki: `Tools > Add-ons > AnkiConnect > Config`
+2. Change `"webCorsOriginList": ["http://localhost"]` to `"webCorsOriginList": ["*"]`
+3. Restart Anki
+4. Click this button again
+                        """)
+                        
                         notes = format_cards_for_ankiconnect(st.session_state['result_df'])
                         notes_json = json.dumps(notes)
                         
@@ -308,7 +317,7 @@ def render_generator(config):
                                     alert('Successfully pushed ' + successCount + ' cards via Browser!');
                                 }}
                             }} catch (err) {{
-                                alert('Failed to connect to Local Anki. Ensure Anki is open and CORS is set to "*" in AnkiConnect config.');
+                                alert('Failed to connect to Local Anki.\\n\\nSetup Required:\\n1. Open Anki\\n2. Go to Tools > Add-ons > AnkiConnect > Config\\n3. Set webCorsOriginList to ["*"]\\n4. Restart Anki');
                             }}
                         }}
                         pushToAnki();
