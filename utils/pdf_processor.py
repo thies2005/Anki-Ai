@@ -1,6 +1,21 @@
+"""
+PDF processing utilities for Anki AI.
+
+Provides functions for extracting text from PDFs, cleaning text,
+and splitting documents into manageable chunks.
+"""
+
 import fitz  # PyMuPDF
 import re
 import unicodedata
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Constants
+DEFAULT_CHUNK_SIZE = 10000
+DEFAULT_OVERLAP = 200
+TOC_PAGE_LIMIT = 50
 
 def extract_text_from_pdf(pdf_stream) -> str:
     """

@@ -1,11 +1,45 @@
-
+# Environment and secrets
 .env
-venv
-__pycache__
-.git
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+.venv/
+ENV/
+
+# Git
+.git/
 .gitignore
+
+# Docker (don't need these in image)
 Dockerfile
 docker-compose.yml
+.dockerignore
+
+# Documentation
 README.md
-old_files/
+LICENSE
+*.md
+docs/
+
+# Development
+.devcontainer/
+.idea/
+.vscode/
+*.swp
+tests/
+
+# Temporary
 tmp/
+old_files/
+*.log
+.streamlit/
+
+# OS
+.DS_Store
+Thumbs.db

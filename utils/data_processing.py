@@ -5,6 +5,12 @@ from io import StringIO
 import requests
 import json
 import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Constants
+ANKICONNECT_TIMEOUT = 5  # seconds
 
 def deduplicate_cards(new_cards: pd.DataFrame, existing_questions: list[str]) -> pd.DataFrame:
     """
@@ -58,15 +64,21 @@ def push_card_to_anki(front: str, back: str, deck: str, tags: list = None) -> bo
     }
     
     try:
-        # Default to localhost for local development
-        # For Docker runs, set ANKI_CONNECT_URL=http://host.docker.internal:8765
         anki_url = os.getenv("ANKI_CONNECT_URL", "http://localhost:8765")
-        response = requests.post(anki_url, json=payload, timeout=2)
+        response = requests.post(anki_url, json=payload, timeout=ANKICONNECT_TIMEOUT)
         result = response.json()
         if result.get("error") is None:
             return True
+        logger.warning(f"AnkiConnect error: {result.get('error')}")
         return False
-    except:
+    except requests.exceptions.Timeout:
+        logger.warning("AnkiConnect request timed out")
+        return False
+    except requests.exceptions.ConnectionError:
+        logger.warning("Could not connect to AnkiConnect - is Anki running?")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error pushing to Anki: {e}")
         return False
 
 def robust_csv_parse(csv_text: str) -> pd.DataFrame:

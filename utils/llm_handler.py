@@ -2,6 +2,13 @@ from google import genai
 from google.genai import types
 import os
 import openai
+import time
+import re
+import json
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 def configure_gemini(api_key: str, fallback_keys: list = None):
@@ -20,10 +27,10 @@ def configure_gemini(api_key: str, fallback_keys: list = None):
     if fallback_keys:
         for key in fallback_keys:
             if key and key.strip():
-                 try:
+                try:
                     clients["fallbacks"].append(genai.Client(api_key=key))
-                 except: 
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to configure fallback key: {e}")
     return clients
 
 def configure_openrouter(api_key: str):
@@ -38,25 +45,65 @@ def configure_openrouter(api_key: str):
         )
     return None
 
-import time
+# Constants for rate limiting
+RATE_LIMIT_GEMMA = 2.0  # 30 RPM
+RATE_LIMIT_FLASH_LITE = 6.0  # 10 RPM
+RATE_LIMIT_FREE = 3.0  # 20 RPM
+RATE_LIMIT_DEFAULT = 1.0
 
-def rate_limit_delay(model_name: str):
-    """Enforces rate limits."""
+# Model fallback lists
+GOOGLE_FALLBACK_MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3-flash", "gemma-3-27b-it"]
+OPENROUTER_FALLBACK_MODELS = [
+    "xiaomi/mimo-v2-flash:free",
+    "google/gemini-2.0-flash-exp:free",
+    "mistralai/devstral-2512:free",
+    "qwen/qwen3-coder:free",
+    "google/gemma-3-27b-it:free"
+]
+
+# Context limits
+CONTEXT_LIMIT_DEFAULT = 100000
+CONTEXT_LIMIT_XIAOMI = 200000
+MAX_SAMPLE_TEXT = 1000000
+MAX_TOC_TEXT = 30000
+MAX_SUMMARY_TEXT = 30000
+MAX_VECTOR_STORE_CHUNKS = 5000
+MIN_CHUNK_LENGTH = 50
+
+def rate_limit_delay(model_name: str) -> None:
+    """Enforces rate limits based on model type."""
     if "gemma" in model_name:
-        delay = 2.0 # 30 RPM
+        delay = RATE_LIMIT_GEMMA
     elif "flash-lite" in model_name:
-        delay = 6.0 # 10 RPM
+        delay = RATE_LIMIT_FLASH_LITE
     elif "free" in model_name:
-        delay = 3.0 # 20 RPM (Requested)
+        delay = RATE_LIMIT_FREE
     else:
-        # Default safety
-        delay = 1.0 
+        delay = RATE_LIMIT_DEFAULT
     time.sleep(delay)
 
+from tenacity import (
+    retry, 
+    stop_after_attempt, 
+    wait_exponential, 
+    retry_if_exception_type,
+    before_sleep_log
+)
+
+def _retry_on_api_error(exception):
+    """Return True if exception is a 429 or 503 error."""
+    msg = str(exception).lower()
+    return "429" in msg or "resource_exhausted" in msg or "503" in msg
+
+@retry(
+    retry=retry_if_exception_type(Exception),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    before_sleep=before_sleep_log(logger, logging.WARNING)
+)
 def _generate_with_retry(model_name: str, contents, config, client_config: dict, fallback_to_flash_lite: bool = True):
     """
     Centralized generation with Key Rotation (Primary -> Fallbacks) and Model Fallback.
-    client_config: dict returned from configuration {"primary": ..., "fallbacks": [...]}
     """
     primary_client = client_config.get("primary")
     fallback_clients = client_config.get("fallbacks", [])
@@ -66,12 +113,10 @@ def _generate_with_retry(model_name: str, contents, config, client_config: dict,
         
     rate_limit_delay(model_name)
     
-    # Define fallback models for Google
-    google_fallbacks = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3-flash", "gemma-3-27b-it"]
     # Ensure current model is tried first, then the others
     models_to_try = [model_name]
     if fallback_to_flash_lite:
-        for m in google_fallbacks:
+        for m in GOOGLE_FALLBACK_MODELS:
             if m not in models_to_try:
                 models_to_try.append(m)
 
@@ -86,43 +131,34 @@ def _generate_with_retry(model_name: str, contents, config, client_config: dict,
     errors = []
     
     for current_model in models_to_try:
-        # Try Primary Key for this model
+        # Try Primary Key
         try:
             return attempt(primary_client, current_model)
         except Exception as e:
-            err_str = str(e)
-            errors.append(f"Model {current_model} (Primary Key) Error: {err_str}")
+            errors.append(f"Model {current_model} (Primary) Error: {e}")
             
-            # If rate limited (429) or other retryable error, try fallback keys
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "503" in err_str:
+            # Key Rotation for fallback clients
+            if _retry_on_api_error(e):
                 for idx, client in enumerate(fallback_clients):
                     try:
-                        time.sleep(1) # Brief pause before switching
+                        time.sleep(1) 
                         return attempt(client, current_model)
                     except Exception as e2:
-                        errors.append(f"Model {current_model} (Fallback Key {idx+1}) Error: {str(e2)}")
-                        continue # Try next key
+                        errors.append(f"Model {current_model} (Fallback {idx+1}) Error: {e2}")
+                        continue
             
-    # If we got here, everything failed.
+    # If we get here, trigger Tenacity retry by raising exception
     raise Exception(f"All attempts failed. Errors: {'; '.join(errors)}")
+
 
 def _generate_with_openrouter(model_name: str, system_instruction: str, user_content: str, client):
     """Generates content using OpenRouter with 429 fallback to other free models."""
     if not client:
         raise ValueError("OpenRouter API Key not configured.")
 
-    # List of free models to try if the primary one fails with 429
-    openrouter_fallbacks = [
-        "xiaomi/mimo-v2-flash:free",
-        "google/gemini-2.0-flash-exp:free",
-        "mistralai/devstral-2512:free",
-        "qwen/qwen3-coder:free",
-        "google/gemma-3-27b-it:free"
-    ]
-    
-    # Try the requested model first
+    # Try the requested model first, then fallbacks
     models_to_try = [model_name]
-    for m in openrouter_fallbacks:
+    for m in OPENROUTER_FALLBACK_MODELS:
         if m not in models_to_try:
             models_to_try.append(m)
 
@@ -164,7 +200,7 @@ def get_chat_response(messages: list, context: str, provider: str, model_name: s
     if direct_chat:
         system_prompt = "You are a helpful and intelligent AI assistant. Answer the user's questions clearly and accurately."
     else:
-        context_limit = 200000 if "xiaomi" in model_name.lower() else 100000
+        context_limit = CONTEXT_LIMIT_XIAOMI if "xiaomi" in model_name.lower() else CONTEXT_LIMIT_DEFAULT
         system_prompt = f"""You are a helpful Medical Assistant AI. 
         Answer questions based strictly on the provided medical context.
         
@@ -327,8 +363,6 @@ def process_chunk(text_chunk: str, google_client=None, openrouter_client=None, p
         
         # Remove markdown code blocks if present
         if "```" in text:
-            import re
-            # Extract content identifying as csv/tsv or just the first block
             match = re.search(r"```(?:csv|tsv)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
             if match:
                 text = match.group(1).strip()
@@ -371,7 +405,7 @@ def analyze_toc_with_gemini(toc_text: str, google_client, model_name: str = "gem
     4. If page numbers are missing or not parseable, return an empty list.
     
     Text:
-    {toc_text[:30000]} 
+    {toc_text[:MAX_TOC_TEXT]} 
     """
 
     try:
@@ -398,7 +432,6 @@ def sort_files_with_gemini(file_names: list[str], google_client=None, openrouter
     """
 
     try:
-        import json
         if "/" in model_name:
             # OpenRouter
             system_instruction = "You are a File Organizer. Output strictly valid JSON."
@@ -418,12 +451,16 @@ def sort_files_with_gemini(file_names: list[str], google_client=None, openrouter
         if len(sorted_list) == len(file_names):
             return sorted_list
         return file_names
-    except:
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning(f"Failed to sort files with AI: {e}")
+        return file_names
+    except Exception as e:
+        logger.error(f"Unexpected error sorting files: {e}")
         return file_names
 
 def generate_chapter_summary(text_chunk: str, google_client=None, openrouter_client=None, model_name: str = "gemma-3-27b-it") -> str:
     """Generates a brief summary of a chapter. Supports Google and OpenRouter."""
-    input_text = text_chunk[:30000] 
+    input_text = text_chunk[:MAX_SUMMARY_TEXT]
     
     prompt = f"Summarize the following medical text in 3-5 concise sentences. Focus on high-yield pathologies and mechanisms.\n\nText:\n{input_text}"
     
@@ -474,7 +511,7 @@ def detect_chapters_in_text(text: str, file_name: str, google_client=None, openr
     Returns: [{"title": "Chapter 1 Name", "description": "..."}, ...]
     """
     # Use up to 1M chars for complete analysis
-    sample_text = text[:1000000]
+    sample_text = text[:MAX_SAMPLE_TEXT]
     
     prompt = f"""Analyze this document text and identify distinct chapters or major sections.
 
@@ -499,13 +536,10 @@ Rules:
 """
 
     try:
-        import json
-        if "/" in model_name:
-            # OpenRouter
+        if is_openrouter_model(model_name):
             system_instruction = "You are a Document Chapter Analyzer. Output strictly valid JSON."
             resp_text = _generate_with_openrouter(model_name, system_instruction, prompt, openrouter_client)
         else:
-            # Google
             response = _generate_with_retry(
                 model_name,
                 prompt,
@@ -517,18 +551,22 @@ Rules:
             
         try:
             chapters = extract_json_from_text(resp_text)
-        except:
-             chapters = []
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Failed to parse chapter JSON: {e}")
+            chapters = []
         
         return chapters if isinstance(chapters, list) and len(chapters) >= 2 else []
-    except:
+    except Exception as e:
+        logger.warning(f"Chapter detection failed: {e}")
         return []  # If detection fails, treat as single document
 
-def extract_json_from_text(text: str):
+def is_openrouter_model(model_name: str) -> bool:
+    """Check if model name indicates OpenRouter provider."""
+    return "/" in model_name
+
+
+def extract_json_from_text(text: str) -> list:
     """Safely extracts JSON from a string, handling markdown code blocks."""
-    import json
-    import re
-    
     text = text.strip()
     
     # 1. Try to find markdown JSON block
@@ -539,7 +577,7 @@ def extract_json_from_text(text: str):
     # 2. If valid JSON, return it
     try:
         return json.loads(text)
-    except:
+    except json.JSONDecodeError:
         pass
         
     # 3. Try to find start [ and end ]
@@ -550,7 +588,7 @@ def extract_json_from_text(text: str):
         json_str = text[start:end+1]
         try:
             return json.loads(json_str)
-        except:
+        except json.JSONDecodeError:
             pass
             
     return []
