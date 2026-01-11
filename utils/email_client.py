@@ -16,6 +16,7 @@ class EmailClient:
         self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
         self.username = os.getenv("SMTP_USERNAME", "user@example.com")
         self.password = os.getenv("SMTP_PASSWORD", "password")
+        self.from_email = os.getenv("SMTP_FROM_EMAIL", self.username)
         self.use_tls = os.getenv("SMTP_USE_TLS", "True").lower() == "true"
         
         # Check if config is dummy/default
@@ -30,7 +31,7 @@ class EmailClient:
 
         try:
             msg = MIMEMultipart()
-            msg['From'] = self.username
+            msg['From'] = self.from_email
             msg['To'] = to_email
             msg['Subject'] = subject
 
