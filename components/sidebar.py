@@ -5,12 +5,20 @@ import streamlit as st
 import os
 from utils.llm_handler import configure_gemini, configure_openrouter, configure_zai
 from components.session import load_fallback_keys
+from utils.auth import UserManager
 
 def render_sidebar():
     """Renders the sidebar and returns configuration."""
+    auth_manager = UserManager()
+    email = st.session_state.get('user_email')
+    user_keys = st.session_state.get('user_keys', {})
+
     with st.sidebar:
         st.header("Configuration")
         
+        if email:
+            st.caption(f"Logged in as: {email}")
+
         # Provider Selection
         provider = st.radio("AI Provider", ["Google Gemini", "OpenRouter", "Z.AI"], index=0)
         
@@ -18,9 +26,13 @@ def render_sidebar():
         model_name = None
         summary_model = None
         
+        # --- Google Gemini ---
         if provider == "Google Gemini":
             st.markdown("[Get Gemini API Key](https://aistudio.google.com/app/api-keys)")
-            user_api_key = st.text_input("Gemini API Key", type="password", help="Leave empty to use built-in fallback keys.")
+            
+            # Pre-fill from user_keys
+            default_key = user_keys.get("google", "")
+            user_api_key = st.text_input("Gemini API Key", value=default_key, type="password", help="Leave empty to use built-in fallback keys.")
             
             fallback_keys = load_fallback_keys()
             
@@ -47,10 +59,13 @@ def render_sidebar():
                 "gemma-3-27b-it": "Gemma 3 27B (High Throughput, 30 RPM)"
             }
             summary_model = "gemma-3-27b-it" 
-        
-        elif provider == "OpenRouter": # OpenRouter
+
+        # --- OpenRouter ---
+        elif provider == "OpenRouter": 
             st.markdown("[Get OpenRouter Key](https://openrouter.ai/keys)")
-            user_api_key = st.text_input("OpenRouter API Key", type="password")
+            
+            default_key = user_keys.get("openrouter", "")
+            user_api_key = st.text_input("OpenRouter API Key", value=default_key, type="password")
             
             if user_api_key:
                 api_key = user_api_key
@@ -77,9 +92,12 @@ def render_sidebar():
             }
             summary_model = "google/gemini-2.0-flash-exp:free"
 
+        # --- Z.AI ---
         elif provider == "Z.AI":
-            st.markdown("[Get Z.AI API Key](https://z.ai/)") # Using placeholder link if actual one not known, or just text
-            user_api_key = st.text_input("Z.AI API Key", type="password")
+            st.markdown("[Get Z.AI API Key](https://z.ai/)") 
+            
+            default_key = user_keys.get("zai", "")
+            user_api_key = st.text_input("Z.AI API Key", value=default_key, type="password")
             
             if user_api_key:
                 api_key = user_api_key
@@ -103,6 +121,7 @@ def render_sidebar():
             }
             summary_model = "GLM-4.7"
         
+        # --- Model Selection ---
         selected_model_key = st.selectbox(
             "Model", 
             options=list(model_options.keys()), 
@@ -111,6 +130,26 @@ def render_sidebar():
         )
         model_name = selected_model_key
         
+        # --- Settings Save Logic ---
+        # If the input key differs from what's in session state (and it's not empty), offer to save
+        current_provider_key_key = ""
+        if provider == "Google Gemini": current_provider_key_key = "google"
+        elif provider == "OpenRouter": current_provider_key_key = "openrouter"
+        elif provider == "Z.AI": current_provider_key_key = "zai"
+        
+        # Only show save if logged in AND not Guest
+        is_guest = st.session_state.get('is_guest', False)
+        
+        if email and user_api_key and user_api_key != user_keys.get(current_provider_key_key, ""):
+            if is_guest:
+                st.info("⚠️ Guest Mode: Keys are temporary and won't be saved.")
+            else:
+                if st.button("💾 Save Key to Profile"):
+                    auth_manager.save_keys(email, {current_provider_key_key: user_api_key})
+                    st.session_state.user_keys[current_provider_key_key] = user_api_key
+                    st.success("Key saved!")
+                    st.rerun()
+
         st.divider()
         chunk_size = st.slider("Chunk Size (chars)", 5000, 20000, 10000, step=1000)
         developer_mode = st.toggle("Developer Mode", value=False)
@@ -122,25 +161,24 @@ def render_sidebar():
             st.caption("For local use, keep default. For Cloud, use a tunnel.")
             anki_url = st.text_input(
                 "AnkiConnect URL", 
-                value=os.getenv("ANKI_CONNECT_URL", "http://localhost:8765"),
-                help="Default: http://localhost:8765. For Streamlit Cloud, use ngrok or similar."
+                value=st.session_state.get('anki_connect_url') or os.getenv("ANKI_CONNECT_URL", "http://localhost:8765"),
+                help="Default: http://localhost:8765"
             )
-            st.markdown("""
-**To use from Streamlit Cloud:**
-1. Install [ngrok](https://ngrok.com/download) on your computer
-2. Run Anki with AnkiConnect addon
-3. In terminal: `ngrok http 8765`
-4. Copy the https URL (e.g., `https://abc123.ngrok.io`)
-5. Paste it above
-            """)
-            
-            # Store in session for use by data_processing
+            # Store/Update in session
             st.session_state['anki_connect_url'] = anki_url
         
         st.divider()
-        if st.button("🔒 Clear Session & Keys", type="secondary"):
-            st.session_state.clear()
-            st.rerun()
+        col_logout, col_clear = st.columns(2)
+        with col_logout:
+            if st.button("🚪 Logout"):
+                st.session_state.clear()
+                st.rerun()
+        
+        with col_clear:
+             if st.button("🗑️ Reset"):
+                # specific clear logic if we want to keep login? No, reset usually kills everything.
+                st.session_state.clear()
+                st.rerun()
 
     return {
         "provider": provider,
@@ -152,4 +190,3 @@ def render_sidebar():
         "show_general_chat": show_general_chat,
         "anki_url": anki_url
     }
-

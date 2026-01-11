@@ -27,6 +27,7 @@ firebase-debug.log
 # Environment and Keys
 .env
 .env.*
+!.env.example
 *.env
 *.key
 *.pem

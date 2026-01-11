@@ -6,6 +6,8 @@ from components.session import init_session_state
 from components.sidebar import render_sidebar
 from components.generator import render_generator
 from components.chat import render_pdf_chat, render_general_chat
+from components.login import render_login
+from components.onboarding import render_onboarding
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -57,10 +59,31 @@ st.title("🩺 Medical PDF to Anki Converter (AI-Powered)")
 # Initialize Session
 init_session_state()
 
+# --- Auth Flow ---
+if not st.session_state.get('is_logged_in', False):
+    render_login()
+    st.stop() # Stop execution here until logged in
+
+# --- Onboarding Flow ---
+# Check if keys are configured (either in session or environment)
+# We consider "configured" if at least one provider key exists or user explicitly skipped.
+if not st.session_state.get('keys_configured', False):
+    # Check if we already have keys in user profile (loaded during login)
+    user_keys = st.session_state.get('user_keys', {})
+    if not user_keys:
+         render_onboarding()
+         st.stop()
+    else:
+        # We have keys, mark as configured
+        st.session_state['keys_configured'] = True
+        st.rerun()
+
+# --- Main App ---
+
 # Render Sidebar & Get Config
 config = render_sidebar()
 
-# Split View
+# Split View logic
 st.divider()
 if config["show_general_chat"]:
     col_gen, col_chat = st.columns([5, 4])
@@ -80,25 +103,6 @@ if config["show_general_chat"] and col_chat is not None:
             config["provider"], 
             config["model_name"]
         )
-else:
-    # If using split view logic inside components/chat.py but we want 
-    # specific placement. 
-    # Actually, the split view logic in original app had
-    # Chat with PDF inside the generator column (bottom) 
-    # AND General Chat in the right column.
-    
-    # render_pdf_chat needs creation inside generator flow?
-    # In original app, 'Chat with PDF' was under 'chapters_data' loop inside col_gen.
-    # In my component split:
-    # Generator handles generated content.
-    # Chat handles interaction.
-    
-    # We should render PDF chat inside the Generator column if chapters exist.
-    # But `render_generator` encapsulates that logic?
-    # Let's check `components/generator.py` I just wrote.
-    # I didn't include `render_pdf_chat` inside `render_generator`.
-    # Let's add it here, or inside generator.
-    pass
 
 # We need to render PDF Chat if chapters exist.
 if 'chapters_data' in st.session_state and st.session_state['chapters_data']:

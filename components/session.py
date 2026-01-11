@@ -15,7 +15,12 @@ def init_session_state():
         "generated_questions": [],
         "pdf_messages": [],
         "general_messages": [],
-        "vector_store": None
+        "vector_store": None,
+        # Auth
+        "is_logged_in": False,
+        "user_email": None,
+        "user_keys": {},
+        "keys_configured": False
     }
     
     for key, value in defaults.items():
