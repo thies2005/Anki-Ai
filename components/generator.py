@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 MAX_FILE_SIZE_MB = 50
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
-def _process_files(uploaded_files, detect_chapters, chunk_size, summary_model, skip_summary=False):
+def _process_files(uploaded_files, detect_chapters, chunk_size, summary_model, skip_summary=False, progress_text=None):
     """
     Helper to process uploaded files: extract text, detecting chapters, (optional) summary, and indexing.
     """
@@ -25,7 +25,8 @@ def _process_files(uploaded_files, detect_chapters, chunk_size, summary_model, s
     sorted_names = list(file_map.keys())
     
     file_chapters = []
-    progress_text = st.empty()
+    if not progress_text:
+        progress_text = st.empty()
     
     # Init Vector Store
     if not st.session_state.get('vector_store'):
@@ -118,15 +119,15 @@ def _process_files(uploaded_files, detect_chapters, chunk_size, summary_model, s
     st.toast(f"Processed {len(file_chapters)} {'chapters' if detect_chapters else 'files'}", icon="📚")
     progress_text.empty()
 
-def _generate_cards(provider, model_name, chunk_size, card_length, card_density, enable_highlighting, custom_prompt, formatting_mode, deck_type, base_deck_name, developer_mode=False):
+def _generate_cards(provider, model_name, chunk_size, card_length, card_density, enable_highlighting, custom_prompt, formatting_mode, deck_type, base_deck_name, developer_mode=False, progress_bar=None, status_text=None):
     """
     Helper to generate cards from processed chapters data.
     """
     try:
         total_chapters = len(st.session_state['chapters_data'])
         all_dfs = []
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        if not progress_bar: progress_bar = st.progress(0)
+        if not status_text: status_text = st.empty()
         
         provider_code = "google"
         if provider == "OpenRouter":
@@ -278,16 +279,21 @@ def render_generator(config):
         uploaded_files = valid_files
 
     if uploaded_files and api_key:
+        # Stable placeholders for progress and status notifications
+        # This prevents layout shifts and disappearing elements during generation
+        gen_status = st.empty()
+        gen_progress = st.empty()
+
         col_proc, col_fast = st.columns([1, 1])
         with col_proc:
-            if st.button("Process Files & Generate Summary", type="secondary"):
+            if st.button("Process Files & Generate Summary", type="secondary", use_container_width=True):
                  with st.spinner("Processing files..."):
-                    _process_files(uploaded_files, detect_chapters, chunk_size, summary_model, skip_summary=False)
+                    _process_files(uploaded_files, detect_chapters, chunk_size, summary_model, skip_summary=False, progress_text=gen_status)
         
         with col_fast:
-            if st.button("⚡ Fast Track: PDF ➡️ Cards", type="primary", help="Skips summary generation and goes straight to cards."):
-                 with st.spinner("Fast Tracking: Processing & Generating..."):
-                    _process_files(uploaded_files, detect_chapters, chunk_size, summary_model, skip_summary=True)
+            if st.button("⚡ Fast Track: PDF ➡️ Cards", type="primary", help="Skips summary generation and goes straight to cards.", use_container_width=True):
+                 with st.spinner("Fast Tracking..."):
+                    _process_files(uploaded_files, detect_chapters, chunk_size, summary_model, skip_summary=True, progress_text=gen_status)
                     _generate_cards(
                         provider=provider,
                         model_name=model_name,
@@ -299,7 +305,9 @@ def render_generator(config):
                         formatting_mode=formatting_mode,
                         deck_type=deck_type,
                         base_deck_name=base_deck_name,
-                        developer_mode=developer_mode
+                        developer_mode=developer_mode,
+                        progress_bar=gen_progress,
+                        status_text=gen_status
                     )
         
         # Show Data & Generate
@@ -314,7 +322,7 @@ def render_generator(config):
             st.divider()
 
             # Global Gen Button
-            if st.button("Generate All Anki Cards (From Summary State)", type="secondary"):
+            if st.button("Generate All Anki Cards (From Summary State)", type="secondary", use_container_width=True):
                  _generate_cards(
                     provider=provider,
                     model_name=model_name,
@@ -326,7 +334,9 @@ def render_generator(config):
                     formatting_mode=formatting_mode,
                     deck_type=deck_type,
                     base_deck_name=base_deck_name,
-                    developer_mode=developer_mode
+                    developer_mode=developer_mode,
+                    progress_bar=gen_progress,
+                    status_text=gen_status
                 )
 
             if 'result_df' in st.session_state:
