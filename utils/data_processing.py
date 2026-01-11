@@ -9,8 +9,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Constants
-ANKICONNECT_TIMEOUT = 5  # seconds
+# Constants - make timeout configurable via environment variable
+ANKICONNECT_TIMEOUT = int(os.getenv("ANKICONNECT_TIMEOUT", "5"))  # seconds
 
 def check_ankiconnect(anki_url: str = None) -> tuple[bool, str, str]:
     """

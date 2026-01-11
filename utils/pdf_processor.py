@@ -21,8 +21,9 @@ def extract_text_from_pdf(pdf_stream) -> str:
     """
     Extracts all text from a PDF file stream.
     """
+    doc = None
     try:
-        pdf_stream.seek(0) # Ensure we start from beginning
+        pdf_stream.seek(0)  # Ensure we start from beginning
         doc = fitz.open(stream=pdf_stream.read(), filetype="pdf")
         text = []
         for page in doc:
@@ -31,26 +32,42 @@ def extract_text_from_pdf(pdf_stream) -> str:
         return unicodedata.normalize('NFC', raw_text)
     except Exception as e:
         raise ValueError(f"Error reading PDF: {e}")
+    finally:
+        # Ensure the document is properly closed to prevent resource leaks
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:
+                pass  # Already closed or invalid
 
 def get_pdf_front_matter(pdf_stream, page_limit: int = 50) -> str:
     """Extracts text from the first 'page_limit' pages."""
+    doc = None
     try:
         pdf_stream.seek(0)
         doc = fitz.open(stream=pdf_stream.read(), filetype="pdf")
         text = []
         limit = min(page_limit, doc.page_count)
         for i in range(limit):
-             text.append(doc.load_page(i).get_text())
+            text.append(doc.load_page(i).get_text())
         raw_text = "\n".join(text)
         return unicodedata.normalize('NFC', raw_text)
     except Exception as e:
         return ""
+    finally:
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:
+                pass
 
 def extract_chapters_from_pdf(pdf_stream, ai_extracted_toc: list = None) -> list[dict]:
     """
     Extracts text per chapter based on PDF outline or AI-provided TOC.
     Returns: list of dicts {'title': str, 'text': str}
     """
+    doc = None
+
     def get_page_offset(doc):
         # Scan first 50 pages to find one labeled "1"
         for i in range(min(50, doc.page_count)):
@@ -136,8 +153,17 @@ def extract_chapters_from_pdf(pdf_stream, ai_extracted_toc: list = None) -> list
             "title": title,
             "text": unicodedata.normalize('NFC', raw_text)
         })
-        
+
     return chapters
+    except Exception as e:
+        raise ValueError(f"Error extracting chapters from PDF: {e}")
+    finally:
+        # Ensure the document is properly closed to prevent resource leaks
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:
+                pass
 
 def clean_text(text: str) -> str:
     """

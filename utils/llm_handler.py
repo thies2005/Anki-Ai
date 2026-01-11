@@ -493,7 +493,9 @@ def process_chunk(text_chunk: str, google_client=None, openrouter_client=None, z
             
         return text
     except Exception as e:
-        return f"Error processing chunk: {str(e)}"
+        # Sanitize error message to avoid information leakage
+        logger.error(f"Error processing chunk: {e}")
+        return "Error processing chunk. Please try again or contact support if the issue persists."
 
 # Legacy alias removal or update if strictly needed, but better to update calls.
 # process_chunk_with_gemini = ... (Removing to encourage proper usage)
@@ -529,7 +531,8 @@ def analyze_toc_with_gemini(toc_text: str, google_client, model_name: str = "gem
         )
         return response.text
     except Exception as e:
-        return f"Error analyzing TOC: {str(e)}"
+        logger.error(f"Error analyzing TOC: {e}")
+        return "Error analyzing table of contents. Please try again."
 
 def sort_files_with_gemini(file_names: list[str], google_client=None, openrouter_client=None, zai_client=None, model_name: str = "gemma-3-27b-it") -> list[str]:
     """Sorts a list of filenames logically. Supports Google and OpenRouter."""
@@ -600,7 +603,8 @@ def generate_chapter_summary(text_chunk: str, google_client=None, openrouter_cli
             )
             return response.text
     except Exception as e:
-        return f"Summary failed: {str(e)}"
+        logger.error(f"Summary generation failed: {e}")
+        return "Summary generation failed. Please try again."
 
 def generate_full_summary(chapter_summaries: list[str], google_client=None, openrouter_client=None, zai_client=None, model_name: str = "gemma-3-27b-it") -> str:
     """Aggregates chapter summaries into a document abstract. Supports Google and OpenRouter."""
@@ -626,7 +630,8 @@ def generate_full_summary(chapter_summaries: list[str], google_client=None, open
             )
             return response.text
     except Exception as e:
-        return f"Full summary failed: {str(e)}"
+        logger.error(f"Full summary generation failed: {e}")
+        return "Full summary generation failed. Please try again."
 
 def detect_chapters_in_text(text: str, file_name: str, google_client=None, openrouter_client=None, zai_client=None, model_name: str = "gemma-3-27b-it") -> list:
     """

@@ -4,14 +4,106 @@ Card generator component.
 import streamlit as st
 import pandas as pd
 import logging
+import re
 from utils.pdf_processor import extract_text_from_pdf, clean_text, recursive_character_text_splitter
 from utils.llm_handler import process_chunk, generate_chapter_summary, detect_chapters_in_text, split_text_by_chapters
 from utils.data_processing import robust_csv_parse, push_card_to_anki, deduplicate_cards, check_ankiconnect, format_cards_for_ankiconnect
 import streamlit.components.v1 as components
 import json
 from utils.rag import SQLiteVectorStore
+import html
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_for_js(data: str) -> str:
+    """
+    Sanitize data for safe injection into JavaScript.
+    Escapes special characters to prevent XSS attacks.
+    """
+    if not isinstance(data, str):
+        data = str(data)
+    # HTML escape first
+    data = html.escape(data)
+    # Additional JSON string escaping
+    data = data.replace('\\', '\\\\').replace('"', '\\"').replace("'", "\\'")
+    return data
+
+
+def _sanitize_item(item):
+    """Recursively sanitize an item for JavaScript injection."""
+    if isinstance(item, str):
+        return _sanitize_for_js(item)
+    elif isinstance(item, list):
+        return [_sanitize_item(i) for i in item]
+    elif isinstance(item, dict):
+        return {k: _sanitize_item(v) for k, v in item.items()}
+    else:
+        return item
+
+
+def _sanitize_deck_name(deck_name: str) -> str:
+    """
+    Sanitize deck names for Anki.
+    Removes special characters that could cause issues with Anki deck hierarchy.
+    Anki deck names can contain '::' as hierarchy separator but other special
+    characters should be limited.
+    """
+    if not deck_name:
+        return "Default"
+
+    # Remove control characters
+    deck_name = ''.join(char for char in deck_name if ord(char) >= 32)
+
+    # Replace problematic characters with safe alternatives
+    # Keep: letters, numbers, spaces, hyphens, underscores, colons, parentheses
+    deck_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', deck_name)
+
+    # Collapse multiple spaces
+    deck_name = re.sub(r'\s+', ' ', deck_name)
+
+    # Trim whitespace
+    deck_name = deck_name.strip()
+
+    # Ensure name is not empty after sanitization
+    if not deck_name:
+        return "Default"
+
+    # Limit length (Anki has practical limits)
+    if len(deck_name) > 100:
+        deck_name = deck_name[:100].strip()
+
+    return deck_name
+
+
+def _validate_pdf_file(uploaded_file) -> bool:
+    """
+    Validate that an uploaded file is actually a PDF by checking its content.
+    This prevents fake PDF files with malicious content from being processed.
+    """
+    try:
+        # Read the first few bytes to check PDF signature
+        uploaded_file.seek(0)
+        header = uploaded_file.read(4)
+        uploaded_file.seek(0)
+
+        # PDF files start with "%PDF" (0x25 0x50 0x44 0x46)
+        if header != b'%PDF':
+            return False
+
+        # Additional check: read a bit more to ensure it's not just a renamed file
+        header = uploaded_file.read(1024)
+        uploaded_file.seek(0)
+
+        # Look for common PDF structural elements
+        content = header.decode('latin-1', errors='ignore')
+        if any(keyword in content for keyword in ['/Type', '/Obj', 'endobj', 'stream']):
+            return True
+
+        return False
+    except Exception as e:
+        logger.error(f"Error validating PDF file: {e}")
+        return False
 
 # Constants
 MAX_FILE_SIZE_MB = 50
@@ -175,19 +267,23 @@ def _generate_cards(provider, model_name, chunk_size, card_length, card_density,
                                 # Track generated questions for future anti-duplication
                                 new_questions = df_chunk["Front"].tolist()
                                 st.session_state['generated_questions'].extend(new_questions)
-                        
-                        clean_title = chapter['title'].replace(":", "-")
-                        
+
+                        # Sanitize chapter title for deck name
+                        clean_title = _sanitize_deck_name(chapter['title'])
+
+                        # Sanitize base deck name
+                        safe_base_deck = _sanitize_deck_name(base_deck_name)
+
                         if "Subdecks" in deck_type:
                             # Chapters as direct subdecks: Base::Chapter
-                            df_chunk["Deck"] = f"{base_deck_name}::{clean_title}"
+                            df_chunk["Deck"] = f"{safe_base_deck}::{clean_title}"
                             df_chunk["Tag"] = ""
                         elif "Tags" in deck_type:
-                                df_chunk["Deck"] = base_deck_name
+                                df_chunk["Deck"] = safe_base_deck
                                 df_chunk["Tag"] = clean_title
                         else:
                             # Default/Both behavior: Base::Chapter
-                            df_chunk["Deck"] = f"{base_deck_name}::{clean_title}"
+                            df_chunk["Deck"] = f"{safe_base_deck}::{clean_title}"
                             df_chunk["Tag"] = clean_title
                         all_dfs.append(df_chunk)
                     except Exception as e:
@@ -262,12 +358,14 @@ def render_generator(config):
 
     uploaded_files = st.file_uploader(f"Upload Medical PDF(s) (Max {MAX_FILE_SIZE_MB}MB/file)", type=["pdf"], accept_multiple_files=True, key="anki_uploader", help=f"Individual files must be under {MAX_FILE_SIZE_MB}MB.")
     
-    # Validate file sizes
+    # Validate file sizes and content
     valid_files = []
     if uploaded_files:
         for f in uploaded_files:
             if f.size > MAX_FILE_SIZE_BYTES:
                 st.warning(f"⚠️ {f.name} exceeds {MAX_FILE_SIZE_MB}MB limit and will be skipped.")
+            elif not _validate_pdf_file(f):
+                st.warning(f"⚠️ {f.name} does not appear to be a valid PDF file and will be skipped.")
             else:
                 valid_files.append(f)
         uploaded_files = valid_files
@@ -367,21 +465,27 @@ def render_generator(config):
                                  st.warning("Cards were not added. They may already exist in the deck.")
                 
                 with col_browser:
-                    if st.button("🌐 Direct Browser Push", help="Works from Cloud without a tunnel. Requires AnkiConnect CORS set to '*'"):
+                    if st.button("🌐 Direct Browser Push", help="Works from Cloud without a tunnel. Requires AnkiConnect CORS configuration"):
                         # Show setup instructions
                         st.info("""
 **⚠️ First-Time Setup Required:**
 1. In Anki: `Tools > Add-ons > AnkiConnect > Config`
-2. Change `"webCorsOriginList": ["http://localhost"]` to `"webCorsOriginList": ["*"]`
+2. Add your deployment URL to `"webCorsOriginList"`: e.g., `["http://localhost:8501", "https://your-app-url.streamlit.app"]`
 3. Restart Anki
 4. Click this button again
+
+**Note:** For better security, add your specific URL instead of using `"*"` (wildcard).
                         """)
-                        
+
                         notes = format_cards_for_ankiconnect(st.session_state['result_df'])
                         # Get unique deck names
                         unique_decks = list(set(st.session_state['result_df']['Deck'].tolist()))
-                        notes_json = json.dumps(notes)
-                        decks_json = json.dumps(unique_decks)
+
+                        # Sanitize data for JavaScript injection (XSS prevention)
+                        sanitized_notes = [_sanitize_item(note) for note in notes]
+                        sanitized_decks = [_sanitize_item(deck) for deck in unique_decks]
+                        notes_json = json.dumps(sanitized_notes)
+                        decks_json = json.dumps(sanitized_decks)
                         
                         js_code = f"""
                         <script>
@@ -426,7 +530,7 @@ def render_generator(config):
                                     alert('Successfully pushed ' + successCount + ' cards via Browser!');
                                 }}
                             }} catch (err) {{
-                                alert('Failed to connect to Local Anki.\\n\\nSetup Required:\\n1. Open Anki\\n2. Go to Tools > Add-ons > AnkiConnect > Config\\n3. Set webCorsOriginList to ["*"]\\n4. Restart Anki');
+                                alert('Failed to connect to Local Anki.\\n\\nSetup Required:\\n1. Open Anki\\n2. Go to Tools > Add-ons > AnkiConnect > Config\\n3. Add your URL to webCorsOriginList\\n4. Restart Anki');
                             }}
                         }}
                         pushToAnki();
@@ -469,8 +573,11 @@ def render_generator(config):
                             )
                             try:
                                 df_single = robust_csv_parse(csv_text)
-                                clean_title = ch['title'].replace(":", "-")
-                                df_single["Deck"] = f"{base_deck_name}::{clean_title}"
+                                # Sanitize chapter title for deck name
+                                clean_title = _sanitize_deck_name(ch['title'])
+                                # Sanitize base deck name
+                                safe_base_deck = _sanitize_deck_name(base_deck_name)
+                                df_single["Deck"] = f"{safe_base_deck}::{clean_title}"
                                 df_single["Tag"] = clean_title
                                 anki_header = "#separator:tab\n#deck column:3\n#tags column:4\n"
                                 single_tsv = anki_header + df_single.to_csv(sep="\t", index=False, header=False, quoting=1)
@@ -523,9 +630,15 @@ def render_generator(config):
                             if st.button(f"🌐 Push (Browser)", key=f"browser_push_btn_{idx}"):
                                 notes = format_cards_for_ankiconnect(df_s)
                                 unique_decks = list(set(df_s['Deck'].tolist()))
-                                notes_json = json.dumps(notes)
-                                decks_json = json.dumps(unique_decks)
-                                
+
+                                # Sanitize data for JavaScript injection (XSS prevention)
+                                sanitized_notes = [_sanitize_item(note) for note in notes]
+                                sanitized_decks = [_sanitize_item(deck) for deck in unique_decks]
+                                notes_json = json.dumps(sanitized_notes)
+                                decks_json = json.dumps(sanitized_decks)
+
+                                # Also sanitize the title for JavaScript context
+                                safe_title = _sanitize_for_js(ch['title'])
                                 js_code = f"""
                                 <script>
                                 async function pushToAnkiSingle() {{
@@ -564,10 +677,10 @@ def render_generator(config):
                                             alert('AnkiConnect Error: ' + result.error);
                                         }} else {{
                                             const successCount = result.result.filter(id => id !== null).length;
-                                            alert('Pushed ' + successCount + ' cards for {ch['title']}!');
+                                            alert('Pushed ' + successCount + ' cards for {safe_title}!');
                                         }}
                                     }} catch (err) {{
-                                        alert('Failed to connect. Ensure Anki is open with CORS set to "*".');
+                                        alert('Failed to connect. Ensure Anki is open with CORS configured for your URL.');
                                     }}
                                 }}
                                 pushToAnkiSingle();

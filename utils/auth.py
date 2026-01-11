@@ -283,13 +283,13 @@ class UserManager:
         # Rate limiting
         self.rate_limiter.record_attempt("reset", email)
         if self.rate_limiter.is_rate_limited("reset", email):
-            return False, f"Too many reset attempts. Please try again later."
+            return False, "Too many reset attempts. Please try again later."
 
         data = self._load_data()
         if email not in data:
             # Don't reveal if email exists - use same message as success
-            # to prevent email enumeration
-            return False, "User not found."
+            # to prevent email enumeration (timing attack mitigation)
+            return False, "If this email is registered, a verification code will be sent."
 
         # Generate cryptographically secure 6-digit code
         code = secrets.token_hex(3)[:6].upper()
@@ -303,9 +303,12 @@ class UserManager:
         # Send Email with plaintext code
         success, msg = self.email_client.send_reset_email(email, code)
         if success:
-            return True, "Verification code sent to email."
+            # Use consistent message to prevent email enumeration
+            return True, "If this email is registered, a verification code will be sent."
         else:
-            return False, f"Failed to send email: {msg}"
+            # Still use consistent message to prevent information leakage
+            logger.error(f"Failed to send reset email to {email}: {msg}")
+            return False, "If this email is registered, a verification code will be sent."
 
     def complete_password_reset(self, email, code, new_password):
         """
@@ -324,22 +327,29 @@ class UserManager:
 
         data = self._load_data()
         if email not in data:
-            return False, "User not found."
+            # Use consistent message to prevent email enumeration
+            return False, "Invalid or expired verification code."
 
         user = data[email]
         stored_code_hash = user.get("reset_code")
         expiry = user.get("reset_expiry", 0)
 
         if not stored_code_hash:
-            return False, "No reset code found. Please request a new one."
+            # Use consistent message to prevent timing attacks
+            return False, "Invalid or expired verification code."
 
         # Hash the provided code and compare using timing-safe comparison
         provided_code_hash = hashlib.sha256(code.encode()).hexdigest()
         if not hmac.compare_digest(stored_code_hash, provided_code_hash):
-            return False, "Invalid verification code."
+            # Use consistent message to prevent timing attacks
+            return False, "Invalid or expired verification code."
 
         if time.time() > expiry:
-            return False, "Verification code expired."
+            # Clear expired code
+            user.pop("reset_code", None)
+            user.pop("reset_expiry", None)
+            self._save_data(data)
+            return False, "Invalid or expired verification code."
 
         # Update Password
         user["password_hash"] = self._hash_password(new_password)
@@ -509,11 +519,39 @@ class UserManager:
         data = self._load_data()
         if email not in data:
             return
-            
+
         sessions = data[email].get("sessions", {})
         if token in sessions:
             del data[email]["sessions"][token]
             self._save_data(data)
+
+    def get_user_by_token(self, token: str):
+        """
+        Retrieve user email by session token with rate limiting protection.
+        Returns (email, user_data) tuple or (None, None) if not found.
+        This prevents token enumeration attacks through rate limiting.
+        """
+        if not token:
+            return None, None
+
+        # Rate limit token lookups to prevent enumeration
+        if self.rate_limiter.is_rate_limited("token_lookup", "global"):
+            logger.warning("Token lookup rate limit reached")
+            return None, None
+
+        self.rate_limiter.record_attempt("token_lookup", "global")
+
+        data = self._load_data()
+        for email, user_data in data.items():
+            if "sessions" in user_data and token in user_data["sessions"]:
+                # Validate the session properly
+                if self.validate_session(email, token):
+                    return email, user_data
+                else:
+                    # Session exists but is expired
+                    return None, None
+
+        return None, None
 
     def get_preferences(self, email):
         """

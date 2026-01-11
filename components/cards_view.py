@@ -9,8 +9,53 @@ from datetime import datetime
 import logging
 import json
 import streamlit.components.v1 as components
+import html
+import re
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_for_js(data: str) -> str:
+    """
+    Sanitize data for safe injection into JavaScript.
+    Escapes special characters to prevent XSS attacks.
+    """
+    if not isinstance(data, str):
+        data = str(data)
+    # HTML escape first, then JSON escape for JavaScript
+    data = html.escape(data)
+    # Additional JSON string escaping
+    data = data.replace('\\', '\\\\').replace('"', '\\"').replace("'", "\\'")
+    return data
+
+
+def _sanitize_json_for_js(obj) -> str:
+    """
+    Safely serialize an object to JSON for JavaScript injection.
+    Sanitizes string values to prevent XSS.
+    """
+    if isinstance(obj, str):
+        return json.dumps(_sanitize_for_js(obj))
+    elif isinstance(obj, list):
+        # Recursively sanitize list items
+        return json.dumps([_sanitize_item(item) for item in obj])
+    elif isinstance(obj, dict):
+        # Recursively sanitize dict values
+        return json.dumps({k: _sanitize_item(v) for k, v in obj.items()})
+    else:
+        return json.dumps(obj)
+
+
+def _sanitize_item(item):
+    """Recursively sanitize an item for JavaScript injection."""
+    if isinstance(item, str):
+        return _sanitize_for_js(item)
+    elif isinstance(item, list):
+        return [_sanitize_item(i) for i in item]
+    elif isinstance(item, dict):
+        return {k: _sanitize_item(v) for k, v in item.items()}
+    else:
+        return item
 
 
 def build_deck_tree(df: pd.DataFrame) -> dict:
@@ -177,14 +222,18 @@ def trigger_browser_push(df):
     """Generates JS to push cards directly from browser."""
     # 1. Show instructions
     st.info("Attempting to push from browser...")
-    
-    # 2. Prepare Data
+
+    # 2. Prepare Data with sanitization
     notes = format_cards_for_ankiconnect(df)
     unique_decks = list(set(df['Deck'].tolist()))
-    
-    notes_json = json.dumps(notes)
-    decks_json = json.dumps(unique_decks)
-    
+
+    # Sanitize data for JavaScript injection (XSS prevention)
+    sanitized_notes = [_sanitize_item(note) for note in notes]
+    sanitized_decks = [_sanitize_item(deck) for deck in unique_decks]
+
+    notes_json = json.dumps(sanitized_notes)
+    decks_json = json.dumps(sanitized_decks)
+
     # 3. Generate JS
     js_code = f"""
     <script>
@@ -229,7 +278,7 @@ def trigger_browser_push(df):
                 alert('Successfully pushed ' + successCount + ' cards via Browser!');
             }}
         }} catch (err) {{
-            alert('Failed to connect to Local Anki.\\n\\n1. Open Anki\\n2. Tools > Add-ons > AnkiConnect > Config\\n3. Set webCorsOriginList to ["*"]\\n4. Restart Anki');
+            alert('Failed to connect to Local Anki.\\n\\n1. Open Anki\\n2. Tools > Add-ons > AnkiConnect > Config\\n3. Add your URL to webCorsOriginList\\n4. Restart Anki');
         }}
     }}
     pushToAnki();

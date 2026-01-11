@@ -137,34 +137,16 @@ if not st.session_state.get('is_logged_in', False):
     
     if session_token:
         auth_manager = UserManager()
-        # We need to find which user owns this token. 
-        # Ideally UserManager should have a method to find user by token.
-        # But our current implementation stores sessions inside user dict.
-        # We'll need a helper or scan. Scanning is okay for small user base.
-        # Let's add a helper to UserManager or just scan here.
-        # To be cleaner, let's update UserManager to support 'get_user_by_token'.
-        # For now, let's do a quick scan since we didn't add that method yet.
-        
-        # Actually, let's implement get_user_by_token in auth.py first to be clean.
-        # But to avoid context switching too much, we can do:
-        
-        all_users = auth_manager._load_data()
-        found_email = None
-        for email, data in all_users.items():
-            if "sessions" in data and session_token in data["sessions"]:
-                # specific token validation
-                if auth_manager.validate_session(email, session_token):
-                    found_email = email
-                    break
-        
+        # Use the secure get_user_by_token method with rate limiting protection
+        found_email, user_data = auth_manager.get_user_by_token(session_token)
+
         if found_email:
-             # Auto-login
-            user_data = all_users[found_email]
+            # Auto-login
             st.session_state['is_logged_in'] = True
             st.session_state['user_email'] = found_email
-            st.session_state['user_keys'] = auth_manager.get_keys(found_email) # Decrypt keys
+            st.session_state['user_keys'] = auth_manager.get_keys(found_email)  # Decrypt keys
             st.session_state['is_guest'] = False
-            
+
             # Load preferences
             prefs = auth_manager.get_preferences(found_email)
             if prefs:
@@ -173,12 +155,13 @@ if not st.session_state.get('is_logged_in', False):
                 st.session_state['summary_model'] = prefs.get('summary_model')
                 st.session_state['chunk_size'] = prefs.get('chunk_size')
                 st.session_state['developer_mode'] = prefs.get('developer_mode')
-            
+
             logger.info(f"Auto-logged in as {found_email}")
-            
+
             # Init empty defaults if needed
-            if 'chapters_data' not in st.session_state: st.session_state['chapters_data'] = []
-            
+            if 'chapters_data' not in st.session_state:
+                st.session_state['chapters_data'] = []
+
             # Optional: Refresh token expiry?
             # For now, just proceed inside.
 
