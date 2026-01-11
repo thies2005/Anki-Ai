@@ -73,7 +73,7 @@ copy .env.example .env
 # Open .env and add your API keys (optional but recommended)
 
 # Start with Docker Compose
-docker-compose up --build
+docker compose up --build
 
 # Access at http://localhost:8501
 # OR checks logs for the Cloudflare Tunnel URL to access remotely
@@ -177,7 +177,7 @@ All passwords must meet the following criteria:
 ### Basic Usage
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 ### Container Services
@@ -256,7 +256,7 @@ For production deployment with a persistent URL, configure a Cloudflare Tunnel.
 
 6. **Start Services**
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
 Your app will be accessible at `https://anki.yourdomain.com`
@@ -283,7 +283,7 @@ To update to the latest version with new features and fixes:
 git pull origin main
 
 # 2. Rebuild and restart containers
-docker-compose up -d --build
+docker compose up -d --build
 
 # 3. Clean up unused images (optional)
 docker image prune -f
