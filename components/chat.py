@@ -26,7 +26,7 @@ def render_pdf_chat(chapters_data, provider, model_name):
                     st.markdown(pdf_prompt)
 
                 with st.chat_message("assistant"):
-                    provider_code = "google" if provider == "Google Gemini" else "openrouter"
+                    provider_code = "google" if provider == "Google Gemini" else ("zai" if provider == "Z.AI" else "openrouter")
                     with st.spinner("Thinking (RAG)..."):
                         # RAG Retrieval
                         context_text = ""
@@ -44,6 +44,7 @@ def render_pdf_chat(chapters_data, provider, model_name):
                             model_name,
                             google_client=st.session_state.google_client,
                             openrouter_client=st.session_state.openrouter_client,
+                            zai_client=st.session_state.zai_client,
                             direct_chat=False
                         )
                     st.markdown(response)
@@ -73,7 +74,7 @@ def render_general_chat(show_general_chat, provider, model_name):
                     st.markdown(gen_prompt)
 
                 with st.chat_message("assistant"):
-                    provider_code = "google" if provider == "Google Gemini" else "openrouter"
+                    provider_code = "google" if provider == "Google Gemini" else ("zai" if provider == "Z.AI" else "openrouter")
                     with st.spinner("Thinking..."):
                         response = get_chat_response(
                             st.session_state.general_messages, 
@@ -82,6 +83,7 @@ def render_general_chat(show_general_chat, provider, model_name):
                             model_name,
                             google_client=st.session_state.google_client,
                             openrouter_client=st.session_state.openrouter_client,
+                            zai_client=st.session_state.zai_client,
                             direct_chat=True
                         )
                     st.markdown(response)

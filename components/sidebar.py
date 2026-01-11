@@ -26,30 +26,32 @@ def render_sidebar():
         model_name = None
         summary_model = None
         
+        # Helper to check if key exists (saved or in env)
+        def has_key(provider_key, env_var):
+            return bool(user_keys.get(provider_key)) or bool(os.getenv(env_var))
+        
         # --- Google Gemini ---
         if provider == "Google Gemini":
-            st.markdown("[Get Gemini API Key](https://aistudio.google.com/app/api-keys)")
-            
-            # Pre-fill from user_keys
-            default_key = user_keys.get("google", "")
-            user_api_key = st.text_input("Gemini API Key", value=default_key, type="password", help="Leave empty to use built-in fallback keys.")
-            
             fallback_keys = load_fallback_keys()
+            saved_key = user_keys.get("google", "")
+            env_key = os.getenv("GOOGLE_API_KEY", "")
             
-            # Init Google Client
-            if user_api_key:
-                api_key = user_api_key
+            if saved_key:
+                api_key = saved_key
                 st.session_state.google_client = configure_gemini(api_key, fallback_keys=fallback_keys)
-                st.success(f"Custom Gemini Key Configured! (+{len(fallback_keys)} backups)")
+                st.success(f"✅ Gemini Key (saved)")
+            elif env_key:
+                api_key = env_key
+                st.session_state.google_client = configure_gemini(api_key, fallback_keys=fallback_keys)
+                st.info("Using Gemini Key from Environment")
+            elif fallback_keys:
+                api_key = fallback_keys[0]
+                st.session_state.google_client = configure_gemini(api_key, fallback_keys=fallback_keys[1:])
+                st.info("Using Fallback Gemini Key (Dev Mode)")
             else:
-                if fallback_keys:
-                    api_key = fallback_keys[0]
-                    st.session_state.google_client = configure_gemini(api_key, fallback_keys=fallback_keys[1:])
-                    st.info(f"Using Fallback Gemini Key (Dev Mode)")
-                else:
-                    st.error("No Gemini Keys found.")
-                    api_key = None
-                    st.session_state.google_client = configure_gemini(None, fallback_keys=[])
+                st.error("No Gemini Keys found. Add one in ⚙️ API Key Settings below.")
+                api_key = None
+                st.session_state.google_client = configure_gemini(None, fallback_keys=[])
     
             # Google Models
             model_options = {
@@ -62,26 +64,21 @@ def render_sidebar():
 
         # --- OpenRouter ---
         elif provider == "OpenRouter": 
-            st.markdown("[Get OpenRouter Key](https://openrouter.ai/keys)")
+            saved_key = user_keys.get("openrouter", "")
+            env_key = os.getenv("OPENROUTER_API_KEY", "")
             
-            default_key = user_keys.get("openrouter", "")
-            user_api_key = st.text_input("OpenRouter API Key", value=default_key, type="password")
-            
-            if user_api_key:
-                api_key = user_api_key
+            if saved_key:
+                api_key = saved_key
                 st.session_state.openrouter_client = configure_openrouter(api_key)
-                st.success("OpenRouter Key Configured!")
+                st.success("✅ OpenRouter Key (saved)")
+            elif env_key:
+                api_key = env_key
+                st.session_state.openrouter_client = configure_openrouter(api_key)
+                st.info("Using OpenRouter Key from Environment")
             else:
-                # Check env
-                env_key = os.getenv("OPENROUTER_API_KEY")
-                if env_key:
-                    api_key = env_key
-                    st.session_state.openrouter_client = configure_openrouter(api_key)
-                    st.info("Using OpenRouter Key from Environment")
-                else:
-                    st.error("OpenRouter Key missing.")
-                    api_key = None
-                    st.session_state.openrouter_client = configure_openrouter(None)
+                st.error("OpenRouter Key missing. Add one in ⚙️ API Key Settings below.")
+                api_key = None
+                st.session_state.openrouter_client = configure_openrouter(None)
     
             model_options = {
                 "xiaomi/mimo-v2-flash:free": "Xiaomi Mimo V2 Flash (Free)",
@@ -94,26 +91,21 @@ def render_sidebar():
 
         # --- Z.AI ---
         elif provider == "Z.AI":
-            st.markdown("[Get Z.AI API Key](https://z.ai/)") 
+            saved_key = user_keys.get("zai", "")
+            env_key = os.getenv("ZAI_API_KEY", "")
             
-            default_key = user_keys.get("zai", "")
-            user_api_key = st.text_input("Z.AI API Key", value=default_key, type="password")
-            
-            if user_api_key:
-                api_key = user_api_key
+            if saved_key:
+                api_key = saved_key
                 st.session_state.zai_client = configure_zai(api_key)
-                st.success("Z.AI Key Configured!")
+                st.success("✅ Z.AI Key (saved)")
+            elif env_key:
+                api_key = env_key
+                st.session_state.zai_client = configure_zai(api_key)
+                st.info("Using Z.AI Key from Environment")
             else:
-                 # Check env
-                env_key = os.getenv("ZAI_API_KEY")
-                if env_key:
-                    api_key = env_key
-                    st.session_state.zai_client = configure_zai(api_key)
-                    st.info("Using Z.AI Key from Environment")
-                else:
-                    st.error("Z.AI Key missing.")
-                    api_key = None
-                    st.session_state.zai_client = configure_zai(None)
+                st.error("Z.AI Key missing. Add one in ⚙️ API Key Settings below.")
+                api_key = None
+                st.session_state.zai_client = configure_zai(None)
             
             model_options = {
                 "GLM-4.7": "GLM-4.7 (Standard)",
@@ -130,25 +122,45 @@ def render_sidebar():
         )
         model_name = selected_model_key
         
-        # --- Settings Save Logic ---
-        # If the input key differs from what's in session state (and it's not empty), offer to save
-        current_provider_key_key = ""
-        if provider == "Google Gemini": current_provider_key_key = "google"
-        elif provider == "OpenRouter": current_provider_key_key = "openrouter"
-        elif provider == "Z.AI": current_provider_key_key = "zai"
-        
-        # Only show save if logged in AND not Guest
+        # --- API Key Settings Expander (for adding/changing keys) ---
         is_guest = st.session_state.get('is_guest', False)
         
-        if email and user_api_key and user_api_key != user_keys.get(current_provider_key_key, ""):
-            if is_guest:
-                st.info("⚠️ Guest Mode: Keys are temporary and won't be saved.")
-            else:
-                if st.button("💾 Save Key to Profile"):
-                    auth_manager.save_keys(email, {current_provider_key_key: user_api_key})
-                    st.session_state.user_keys[current_provider_key_key] = user_api_key
-                    st.success("Key saved!")
+        if not is_guest:
+            with st.expander("⚙️ API Key Settings", expanded=False):
+                st.caption("Add or update your API keys here. Keys are saved securely to your profile.")
+                
+                # Google
+                st.markdown("[Get Gemini API Key](https://aistudio.google.com/app/api-keys)")
+                new_google_key = st.text_input("Gemini API Key", value="", type="password", key="new_google_key", placeholder="Enter new key...")
+                if new_google_key and st.button("💾 Save Gemini Key"):
+                    auth_manager.save_keys(email, {"google": new_google_key})
+                    st.session_state.user_keys["google"] = new_google_key
+                    st.success("Gemini Key saved!")
                     st.rerun()
+                
+                st.divider()
+                
+                # OpenRouter
+                st.markdown("[Get OpenRouter Key](https://openrouter.ai/keys)")
+                new_openrouter_key = st.text_input("OpenRouter API Key", value="", type="password", key="new_openrouter_key", placeholder="Enter new key...")
+                if new_openrouter_key and st.button("💾 Save OpenRouter Key"):
+                    auth_manager.save_keys(email, {"openrouter": new_openrouter_key})
+                    st.session_state.user_keys["openrouter"] = new_openrouter_key
+                    st.success("OpenRouter Key saved!")
+                    st.rerun()
+                
+                st.divider()
+                
+                # Z.AI
+                st.markdown("[Get Z.AI API Key](https://z.ai/)")
+                new_zai_key = st.text_input("Z.AI API Key", value="", type="password", key="new_zai_key", placeholder="Enter new key...")
+                if new_zai_key and st.button("💾 Save Z.AI Key"):
+                    auth_manager.save_keys(email, {"zai": new_zai_key})
+                    st.session_state.user_keys["zai"] = new_zai_key
+                    st.success("Z.AI Key saved!")
+                    st.rerun()
+        else:
+            st.info("⚠️ Guest Mode: Keys are temporary. Log in to save keys.")
 
         st.divider()
         chunk_size = st.slider("Chunk Size (chars)", 5000, 20000, 10000, step=1000)
