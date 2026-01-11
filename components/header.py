@@ -139,26 +139,54 @@ def render_settings_modal(config):
         with tab_api:
             st.markdown("##### Manage Keys")
             if is_guest:
-                st.warning("Guest Mode: Keys are temporary.")
-            else:
-                user_keys = st.session_state.get('user_keys', {})
+                st.warning("Guest Mode: Keys are temporary and not saved.")
                 
-                col_k1, col_k2 = st.columns(2)
-                with col_k1:
-                    google_k = st.text_input("Gemini Key", value=user_keys.get("google", ""), type="password")
-                    if st.button("Save Gemini"):
-                        auth_manager.save_keys(email, {**user_keys, "google": google_k})
-                        st.session_state.user_keys["google"] = google_k
-                        st.success("Saved!")
-                        
-                with col_k2:
-                    zai_k = st.text_input("Z.AI Key", value=user_keys.get("zai", ""), type="password")
-                    if st.button("Save Z.AI"):
-                         auth_manager.save_keys(email, {**user_keys, "zai": zai_k})
-                         st.session_state.user_keys["zai"] = zai_k
-                         st.success("Saved!")
-                         
-                st.caption("OpenRouter key can also be updated here.")
+            user_keys = st.session_state.get('user_keys', {})
+
+            # Helper to render key input/delete
+            def render_key_control(provider_key, display_name):
+                # Check if key exists
+                has_key = bool(user_keys.get(provider_key))
+                
+                st.markdown(f"**{display_name}**")
+                
+                if has_key:
+                    col_status, col_del = st.columns([3, 1])
+                    with col_status:
+                        st.success("✅ Key Saved (Hidden)")
+                    with col_del:
+                        if st.button("🗑️ Delete", key=f"del_{provider_key}"):
+                            # Remove key
+                            new_keys = user_keys.copy()
+                            if provider_key in new_keys:
+                                del new_keys[provider_key]
+                            auth_manager.save_keys(email, new_keys)
+                            st.session_state.user_keys = new_keys
+                            st.rerun()
+                else:
+                    # Input for new key
+                    col_in, col_save = st.columns([3, 1])
+                    with col_in:
+                        new_val = st.text_input(f"Enter {display_name}", type="password", key=f"in_{provider_key}", label_visibility="collapsed", placeholder=f"sk-...")
+                    with col_save:
+                        if st.button("Save", key=f"save_{provider_key}"):
+                            if new_val.strip():
+                                auth_manager.save_keys(email, {**user_keys, provider_key: new_val.strip()})
+                                st.session_state.user_keys[provider_key] = new_val.strip()
+                                st.success("Saved!")
+                                st.rerun()
+                            else:
+                                st.error("Empty")
+                st.markdown("---")
+
+            # Google Gemini
+            render_key_control("google", "Google Gemini Key")
+
+            # Z.AI
+            render_key_control("zai", "Z.AI Key")
+
+            # OpenRouter
+            render_key_control("openrouter", "OpenRouter Key")
         
         with tab_anki:
             current_url = st.session_state.get('anki_connect_url') or os.getenv("ANKI_CONNECT_URL", "http://localhost:8765")

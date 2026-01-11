@@ -86,3 +86,66 @@ def test_migration_from_sha256(auth_manager):
     assert new_hash != legacy_hash
     assert new_hash.startswith("$2b$")
     assert bcrypt.checkpw(password.encode(), new_hash.encode())
+
+
+# --- Encryption Tests ---
+
+def test_encryption_roundtrip(auth_manager):
+    """Test that encryption and decryption work correctly."""
+    from utils.auth import _key_encryption
+    
+    original = "sk-test-api-key-12345"
+    encrypted = _key_encryption.encrypt(original)
+    
+    assert encrypted != original
+    assert encrypted.startswith("enc:")
+    
+    decrypted = _key_encryption.decrypt(encrypted)
+    assert decrypted == original
+
+
+def test_encryption_plaintext_passthrough(auth_manager):
+    """Test that plaintext values (without enc: prefix) are returned as-is."""
+    from utils.auth import _key_encryption
+    
+    plaintext = "sk-plaintext-key"
+    result = _key_encryption.decrypt(plaintext)
+    
+    assert result == plaintext
+
+
+def test_is_encrypted_check(auth_manager):
+    """Test the is_encrypted helper."""
+    from utils.auth import _key_encryption
+    
+    assert _key_encryption.is_encrypted("enc:abc123") == True
+    assert _key_encryption.is_encrypted("plaintext-key") == False
+    assert _key_encryption.is_encrypted("") == False
+    assert _key_encryption.is_encrypted(None) == False
+
+
+def test_save_and_get_keys_with_encryption(auth_manager):
+    """Test that keys are encrypted when saved and decrypted when retrieved."""
+    email = "crypto@example.com"
+    password = "TestPass123"
+    
+    # Register user
+    auth_manager.register(email, password)
+    
+    # Save keys
+    test_keys = {"google": "sk-test-google-key", "openrouter": "sk-test-or-key"}
+    auth_manager.save_keys(email, test_keys)
+    
+    # Verify storage is encrypted by loading raw data
+    with open(TEST_DATA_FILE, 'r') as f:
+        raw_data = json.load(f)
+    
+    stored_keys = raw_data[email]["api_keys"]
+    for key_value in stored_keys.values():
+        assert key_value.startswith("enc:"), "Keys should be encrypted in storage"
+    
+    # Verify retrieval decrypts correctly
+    retrieved = auth_manager.get_keys(email)
+    assert retrieved["google"] == "sk-test-google-key"
+    assert retrieved["openrouter"] == "sk-test-or-key"
+

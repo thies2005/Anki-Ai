@@ -5,8 +5,10 @@ import hmac
 import logging
 import secrets
 import time
+import base64
 import bcrypt
 import re
+from cryptography.fernet import Fernet, InvalidToken
 from utils.email_client import EmailClient
 
 DATA_FILE = "data/users.json"
@@ -60,6 +62,117 @@ class RateLimiter:
 
 # Global rate limiter instance
 _rate_limiter = RateLimiter()
+
+
+class KeyEncryption:
+    """
+    Handles encryption/decryption of API keys using Fernet symmetric encryption.
+    
+    The encryption key is loaded from API_ENCRYPTION_KEY environment variable.
+    If not set, a key is auto-generated and saved to .encryption_key file.
+    """
+    
+    KEY_FILE = "data/.encryption_key"
+    
+    def __init__(self):
+        self._fernet = None
+        self._init_encryption()
+    
+    def _init_encryption(self):
+        """Initialize the Fernet cipher with encryption key."""
+        key = self._get_or_create_key()
+        if key:
+            try:
+                self._fernet = Fernet(key)
+            except Exception as e:
+                logger.error(f"Failed to initialize encryption: {e}")
+                self._fernet = None
+    
+    def _get_or_create_key(self) -> bytes:
+        """
+        Get encryption key from environment or file, or generate a new one.
+        Returns the key as bytes suitable for Fernet.
+        """
+        # 1. Try environment variable first
+        env_key = os.getenv("API_ENCRYPTION_KEY")
+        if env_key:
+            try:
+                # Ensure it's valid base64 and correct length
+                key_bytes = base64.urlsafe_b64decode(env_key)
+                if len(key_bytes) == 32:
+                    return env_key.encode() if isinstance(env_key, str) else env_key
+            except Exception:
+                logger.warning("Invalid API_ENCRYPTION_KEY format, generating new key")
+        
+        # 2. Try loading from file
+        if os.path.exists(self.KEY_FILE):
+            try:
+                with open(self.KEY_FILE, 'rb') as f:
+                    key = f.read().strip()
+                    # Validate key
+                    Fernet(key)
+                    return key
+            except Exception as e:
+                logger.warning(f"Failed to load encryption key from file: {e}")
+        
+        # 3. Generate new key
+        key = Fernet.generate_key()
+        try:
+            os.makedirs(os.path.dirname(self.KEY_FILE), exist_ok=True)
+            with open(self.KEY_FILE, 'wb') as f:
+                f.write(key)
+            logger.info("Generated new API encryption key")
+        except Exception as e:
+            logger.error(f"Failed to save encryption key: {e}")
+        
+        return key
+    
+    def encrypt(self, plaintext: str) -> str:
+        """
+        Encrypt a string value.
+        Returns encrypted value prefixed with 'enc:' marker.
+        """
+        if not plaintext or not self._fernet:
+            return plaintext
+        
+        try:
+            encrypted = self._fernet.encrypt(plaintext.encode('utf-8'))
+            return f"enc:{encrypted.decode('utf-8')}"
+        except Exception as e:
+            logger.error(f"Encryption failed: {e}")
+            return plaintext
+    
+    def decrypt(self, ciphertext: str) -> str:
+        """
+        Decrypt a string value.
+        Handles both encrypted (prefixed with 'enc:') and plaintext values.
+        """
+        if not ciphertext or not self._fernet:
+            return ciphertext
+        
+        # Check if value is encrypted (has our marker)
+        if not ciphertext.startswith("enc:"):
+            # Plaintext value - return as-is (migration case)
+            return ciphertext
+        
+        try:
+            encrypted_data = ciphertext[4:]  # Remove 'enc:' prefix
+            decrypted = self._fernet.decrypt(encrypted_data.encode('utf-8'))
+            return decrypted.decode('utf-8')
+        except InvalidToken:
+            logger.error("Decryption failed: invalid token (wrong key?)")
+            return ""
+        except Exception as e:
+            logger.error(f"Decryption failed: {e}")
+            return ""
+    
+    def is_encrypted(self, value: str) -> bool:
+        """Check if a value is already encrypted."""
+        return value.startswith("enc:") if value else False
+
+
+# Global encryption instance
+_key_encryption = KeyEncryption()
 
 class UserManager:
     def __init__(self, data_file=DATA_FILE):
@@ -277,23 +390,65 @@ class UserManager:
     def save_keys(self, email, keys):
         """
         Updates API keys for a user.
+        Keys are encrypted before storage.
         keys: dict of {'provider_name': 'key_value'}
         """
         data = self._load_data()
         if email not in data:
             return False, "User not found."
         
+        # Encrypt each key before storing
+        encrypted_keys = {}
+        for provider, key_value in keys.items():
+            if key_value and not _key_encryption.is_encrypted(key_value):
+                encrypted_keys[provider] = _key_encryption.encrypt(key_value)
+            else:
+                encrypted_keys[provider] = key_value
+        
         # Update keys (merge with existing)
         current_keys = data[email].get("api_keys", {})
-        current_keys.update(keys)
+        current_keys.update(encrypted_keys)
         data[email]["api_keys"] = current_keys
         
         self._save_data(data)
         return True, "Keys saved successfully."
 
     def get_keys(self, email):
-        """Retrieve API keys for a user."""
+        """
+        Retrieve API keys for a user.
+        Keys are decrypted before returning.
+        Also handles migration of existing plaintext keys.
+        """
         data = self._load_data()
         if email not in data:
             return {}
-        return data[email].get("api_keys", {})
+        
+        stored_keys = data[email].get("api_keys", {})
+        decrypted_keys = {}
+        needs_migration = False
+        
+        for provider, key_value in stored_keys.items():
+            if key_value:
+                if _key_encryption.is_encrypted(key_value):
+                    # Already encrypted - decrypt it
+                    decrypted_keys[provider] = _key_encryption.decrypt(key_value)
+                else:
+                    # Plaintext key - decrypt returns as-is, mark for migration
+                    decrypted_keys[provider] = key_value
+                    needs_migration = True
+            else:
+                decrypted_keys[provider] = key_value
+        
+        # Migrate plaintext keys to encrypted
+        if needs_migration:
+            logger.info(f"Migrating plaintext API keys for {email}")
+            encrypted_keys = {}
+            for provider, key_value in stored_keys.items():
+                if key_value and not _key_encryption.is_encrypted(key_value):
+                    encrypted_keys[provider] = _key_encryption.encrypt(key_value)
+                else:
+                    encrypted_keys[provider] = key_value
+            data[email]["api_keys"] = encrypted_keys
+            self._save_data(data)
+        
+        return decrypted_keys
