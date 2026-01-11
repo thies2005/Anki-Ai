@@ -20,6 +20,10 @@ def check_ankiconnect(anki_url: str = None) -> tuple[bool, str]:
     if not anki_url:
         anki_url = os.getenv("ANKI_CONNECT_URL", "http://localhost:8765")
     
+    # Basic URL structure validation
+    if not (anki_url.startswith("http://") or anki_url.startswith("https://")):
+        return False, "Invalid URL: Must start with http:// or https://"
+    
     try:
         response = requests.post(
             anki_url, 

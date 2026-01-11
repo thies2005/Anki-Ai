@@ -23,7 +23,15 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: anki-tunnel
     restart: unless-stopped
-    command: tunnel --url http://anki-ai:8501
+    command: tunnel run
     depends_on:
       anki-ai:
         condition: service_healthy
+    volumes:
+      # Mount your Cloudflare tunnel credentials
+      # Run: cloudflared tunnel create <tunnel-name>
+      # Then copy the cert.pem and config.json to ./cloudflared/
+      - ./cloudflared:/home/cloudflared/.cloudflared:ro
+    environment:
+      # Optional: Override tunnel name with env var
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-}

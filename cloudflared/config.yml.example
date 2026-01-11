@@ -1,0 +1,21 @@
+# Cloudflare Tunnel Configuration
+# Copy this file to cloudflared/config.yml and fill in your details
+
+# Your Tunnel ID (from: cloudflared tunnel create <name>)
+tunnel: YOUR_TUNNEL_UUID_HERE
+
+# Path to tunnel credentials (in container, mounted from host)
+credentials-file: /home/cloudflared/.cloudflared/YOUR_TUNNEL_UUID_HERE.json
+
+# Routing rules
+ingress:
+  # Your Anki AI application
+  - hostname: anki.yourdomain.com
+    service: http://anki-ai:8501
+
+  # Optional: Add more routes for other services
+  # - hostname: api.yourdomain.com
+  #   service: http://api-service:8000
+
+  # Catch-all: return 404 for unmatched routes
+  - service: http_status:404
