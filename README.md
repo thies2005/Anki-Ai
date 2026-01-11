@@ -56,24 +56,34 @@ A powerful AI-powered tool that converts medical PDFs into high-yield Anki flash
 ## 🚀 Quick Start
 
 ### Option 1: Docker (Recommended)
+Includes a secure Cloudflare Tunnel for easy remote access.
 
 ```bash
-# Clone repository
-git clone https://github.com/yourusername/anki-ai.git
-cd anki-ai
+# Clone repository (No login required)
+git clone https://github.com/thies2005/Anki-Ai.git
+cd Anki-Ai
+
+# Set up environment variables
+# Linux/Mac:
+cp .env.example .env
+# Windows (CMD):
+copy .env.example .env
+
+# Open .env and add your API keys (optional but recommended)
 
 # Start with Docker Compose
 docker-compose up --build
 
 # Access at http://localhost:8501
+# OR checks logs for the Cloudflare Tunnel URL to access remotely
 ```
 
 ### Option 2: Manual Setup
 
 ```bash
 # Clone and enter directory
-git clone https://github.com/yourusername/anki-ai.git
-cd anki-ai
+git clone https://github.com/thies2005/Anki-Ai.git
+cd Anki-Ai
 
 # Create virtual environment
 python -m venv venv
