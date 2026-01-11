@@ -17,6 +17,199 @@ logger = logging.getLogger(__name__)
 MAX_FILE_SIZE_MB = 50
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
+def _process_files(uploaded_files, detect_chapters, chunk_size, summary_model, skip_summary=False):
+    """
+    Helper to process uploaded files: extract text, detecting chapters, (optional) summary, and indexing.
+    """
+    file_map = {f.name: f for f in uploaded_files}
+    sorted_names = list(file_map.keys())
+    
+    file_chapters = []
+    progress_text = st.empty()
+    
+    # Init Vector Store
+    if not st.session_state.get('vector_store'):
+        st.session_state.vector_store = SQLiteVectorStore()
+    
+    # Clear previous data
+    st.session_state['chapters_data'] = []
+    st.session_state.vector_store.clear()
+    
+    idx = 0
+    for name in sorted_names:
+        idx += 1
+        if name in file_map:
+            f = file_map[name]
+            fname = f.name.replace(".pdf", "").replace("_", " ").title()
+            
+            # Chapter Detection Option
+            if detect_chapters:
+                progress_text.text(f"Extracting text from {name}...")
+                text = extract_text_from_pdf(f)
+                
+                progress_text.text(f"Detecting chapters in {name} using AI...")
+                detected_chapters = detect_chapters_in_text(
+                    text, fname, 
+                    google_client=st.session_state.google_client, 
+                    openrouter_client=st.session_state.openrouter_client, 
+                    model_name=st.session_state.get('config_model_name', 'gemini-2.0-flash-exp') # Fallback or pass model_name
+                )
+                
+                if detected_chapters:
+                    progress_text.text(f"Splitting {name} into {len(detected_chapters)} chapters...")
+                    chapter_texts = split_text_by_chapters(text, detected_chapters)
+                    
+                    if chapter_texts:
+                        # Successfully split into chapters
+                        for ch_data in chapter_texts:
+                            ch_title = ch_data['title']
+                            ch_text = ch_data['text']
+                            
+                            # Use robust cleaner
+                            ch_text_cleaned = clean_text(ch_text)
+                            
+                            ch_summary = "Summary skipped (Fast Track)"
+                            if not skip_summary:
+                                try:
+                                    ch_summary = generate_chapter_summary(ch_text_cleaned, google_client=st.session_state.google_client, openrouter_client=st.session_state.openrouter_client, model_name=summary_model)
+                                except Exception as e:
+                                    logger.warning(f"Summary generation failed for {ch_title}: {e}")
+                                    ch_summary = "(Summary generation failed)"
+                            
+                            # Index for RAG
+                            chunks = recursive_character_text_splitter(ch_text_cleaned, chunk_size=2000)
+                            st.session_state.vector_store.add_chunks(chunks, google_client=st.session_state.google_client, metadata_list=[{"source": f"{fname} - {ch_title}"}]*len(chunks))
+                            
+                            file_chapters.append({
+                                "title": f"{fname} - {ch_title}",
+                                "text": ch_text_cleaned,
+                                "summary": ch_summary,
+                                "parent_file": fname
+                            })
+                        continue  # Move to next file
+
+            
+            # Default: treat entire file as one chapter
+            progress_text.text(f"Processing full text of {name}...")
+            text = extract_text_from_pdf(f)
+            cleaned_text = clean_text(text)
+            
+            # Index for RAG
+            chunks = recursive_character_text_splitter(cleaned_text, chunk_size=2000)
+            st.session_state.vector_store.add_chunks(chunks, google_client=st.session_state.google_client, metadata_list=[{"source": fname}]*len(chunks))
+
+            summary = "Summary skipped (Fast Track)"
+            if not skip_summary:
+                try:
+                    summary = generate_chapter_summary(cleaned_text, google_client=st.session_state.google_client, openrouter_client=st.session_state.openrouter_client, model_name=summary_model)
+                except Exception as e:
+                    logger.warning(f"Summary failed for {name}: {e}")
+                    summary = "(Summary generation failed)"
+            
+            file_chapters.append({
+                "title": fname,
+                "text": cleaned_text,
+                "summary": summary,
+                "parent_file": fname
+            })
+    
+    st.session_state['chapters_data'] = file_chapters
+    st.toast(f"Processed {len(file_chapters)} {'chapters' if detect_chapters else 'files'}", icon="📚")
+    progress_text.empty()
+
+def _generate_cards(provider, model_name, chunk_size, card_length, card_density, enable_highlighting, custom_prompt, formatting_mode, deck_type, base_deck_name, developer_mode=False):
+    """
+    Helper to generate cards from processed chapters data.
+    """
+    try:
+        total_chapters = len(st.session_state['chapters_data'])
+        all_dfs = []
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        provider_code = "google" if provider == "Google Gemini" else "openrouter"
+        
+        if 'generated_questions' not in st.session_state:
+            st.session_state['generated_questions'] = []
+        
+        for ch_idx, chapter in enumerate(st.session_state['chapters_data']):
+            raw_text = chapter['text']
+            cleaned = clean_text(raw_text)
+            chunks = recursive_character_text_splitter(cleaned, chunk_size=chunk_size)
+            
+            status_text.text(f"Processing {chapter['title']}...")
+            
+            for chunk_idx, chunk in enumerate(chunks):
+                current_progress = (ch_idx + (chunk_idx / len(chunks))) / total_chapters
+                progress_bar.progress(min(current_progress, 1.0))
+                
+                csv_chunk = process_chunk(
+                    chunk, 
+                    google_client=st.session_state.google_client,
+                    openrouter_client=st.session_state.openrouter_client,
+                    provider=provider_code,
+                    model_name=model_name,
+                    card_length=card_length,
+                    card_density=card_density,
+                    enable_highlighting=enable_highlighting,
+                    custom_prompt=custom_prompt,
+                    formatting_mode=formatting_mode,
+                    existing_topics=st.session_state['generated_questions']
+                )
+                
+                if csv_chunk and not csv_chunk.startswith("Error"):
+                    try:
+                        df_chunk = robust_csv_parse(csv_chunk)
+                        if not df_chunk.empty:
+                                # Deduplicate against existing questions
+                                df_chunk = deduplicate_cards(df_chunk, st.session_state['generated_questions'])
+                                
+                        if not df_chunk.empty:
+                                # Track generated questions for future anti-duplication
+                                new_questions = df_chunk["Front"].tolist()
+                                st.session_state['generated_questions'].extend(new_questions)
+                        
+                        clean_title = chapter['title'].replace(" ", "_").replace(":", "-")
+                        parent_file = chapter.get('parent_file', chapter['title']).replace(" ", "_").replace(":", "-")
+                        
+                        if "Subdecks" in deck_type:
+                            # If chapters detected, create: Base::ParentFile::Chapter
+                            if 'parent_file' in chapter and chapter['parent_file'] != chapter['title']:
+                                df_chunk["Deck"] = f"{base_deck_name}::{parent_file}::{clean_title}"
+                            else:
+                                df_chunk["Deck"] = f"{base_deck_name}::{clean_title}"
+                            df_chunk["Tag"] = ""
+                        elif "Tags" in deck_type:
+                                df_chunk["Deck"] = base_deck_name
+                                df_chunk["Tag"] = clean_title
+                        else:
+                                if 'parent_file' in chapter and chapter['parent_file'] != chapter['title']:
+                                    df_chunk["Deck"] = f"{base_deck_name}::{parent_file}::{clean_title}"
+                                else:
+                                    df_chunk["Deck"] = f"{base_deck_name}::{clean_title}"
+                                df_chunk["Tag"] = clean_title
+                        all_dfs.append(df_chunk)
+                    except Exception as e:
+                        if developer_mode:
+                            st.warning(f"Failed to parse chunk: {e}")
+                            st.code(csv_chunk)
+        
+        progress_bar.progress(1.0)
+        status_text.empty()
+        
+        if all_dfs:
+            final_df = pd.concat(all_dfs, ignore_index=True)
+            final_df = final_df[["Front", "Back", "Deck", "Tag"]]
+            st.session_state['result_df'] = final_df
+            # Create proper Anki TSV with header comments
+            anki_header = "#separator:tab\n#deck column:3\n#tags column:4\n"
+            tsv_content = final_df.to_csv(sep="\t", index=False, header=False, quoting=1)
+            st.session_state['result_csv'] = anki_header + tsv_content
+            st.success(f"Generated {len(final_df)} cards!")
+        else:
+            st.error("No cards generated. Check errors above.")
+    except Exception as e:
+        st.error(f"Error: {e}")
+
 def render_generator(config):
     """Renders the card generator interface."""
     provider = config["provider"]
@@ -25,6 +218,9 @@ def render_generator(config):
     summary_model = config["summary_model"]
     chunk_size = config["chunk_size"]
     developer_mode = config["developer_mode"]
+    
+    # Store config model name for helper access if needed (or pass explicitly)
+    st.session_state['config_model_name'] = model_name
 
     st.subheader("1. Card Generator")
     
@@ -59,93 +255,29 @@ def render_generator(config):
         uploaded_files = valid_files
 
     if uploaded_files and api_key:
-        # Processing Logic
-        if st.button("Process Files & Generate Summaries", type="secondary"):
-             with st.spinner("Processing files..."):
-                file_map = {f.name: f for f in uploaded_files}
-                sorted_names = list(file_map.keys())
-                
-                file_chapters = []
-                progress_text = st.empty()
-                
-                # Init Vector Store
-                if not st.session_state.get('vector_store'):
-                    st.session_state.vector_store = SQLiteVectorStore()
-                
-                # Clear previous data
-                st.session_state['chapters_data'] = []
-                st.session_state.vector_store.clear()
-                
-                for idx, name in enumerate(sorted_names):
-                    if name in file_map:
-                        f = file_map[name]
-                        fname = f.name.replace(".pdf", "").replace("_", " ").title()
-                        
-                        # Chapter Detection Option
-                        if detect_chapters:
-                            progress_text.text(f"Extracting text from {name}...")
-                            text = extract_text_from_pdf(f)
-                            
-                            progress_text.text(f"Detecting chapters in {name} using AI...")
-                            # Use text-based chapter detection with the normal model (same as Anki cards)
-                            detected_chapters = detect_chapters_in_text(text, fname, google_client=st.session_state.google_client, openrouter_client=st.session_state.openrouter_client, model_name=model_name)
-                            
-                            if detected_chapters:
-                                progress_text.text(f"Splitting {name} into {len(detected_chapters)} chapters...")
-                                chapter_texts = split_text_by_chapters(text, detected_chapters)
-                                
-                                if chapter_texts:
-                                    # Successfully split into chapters
-                                    for ch_data in chapter_texts:
-                                        ch_title = ch_data['title']
-                                        ch_text = ch_data['text']
-                                        
-                                        # Use robust cleaner
-                                        ch_text_cleaned = clean_text(ch_text)
-                                        
-                                        try:
-                                            ch_summary = generate_chapter_summary(ch_text_cleaned, google_client=st.session_state.google_client, openrouter_client=st.session_state.openrouter_client, model_name=summary_model)
-                                        except Exception as e:
-                                            logger.warning(f"Summary generation failed for {ch_title}: {e}")
-                                            ch_summary = "(Summary generation failed)"
-                                        
-                                        # Index for RAG
-                                        chunks = recursive_character_text_splitter(ch_text_cleaned, chunk_size=2000)
-                                        st.session_state.vector_store.add_chunks(chunks, google_client=st.session_state.google_client, metadata_list=[{"source": f"{fname} - {ch_title}"}]*len(chunks))
-                                        
-                                        file_chapters.append({
-                                            "title": f"{fname} - {ch_title}",
-                                            "text": ch_text_cleaned,
-                                            "summary": ch_summary,
-                                            "parent_file": fname
-                                        })
-                                    continue  # Move to next file
-
-                        
-                        # Default: treat entire file as one chapter
-                        progress_text.text(f"Processing full text of {name}...")
-                        text = extract_text_from_pdf(f)
-                        cleaned_text = clean_text(text)
-                        
-                        # Index for RAG
-                        chunks = recursive_character_text_splitter(cleaned_text, chunk_size=2000)
-                        st.session_state.vector_store.add_chunks(chunks, google_client=st.session_state.google_client, metadata_list=[{"source": fname}]*len(chunks))
-
-                        try:
-                            summary = generate_chapter_summary(cleaned_text, google_client=st.session_state.google_client, openrouter_client=st.session_state.openrouter_client, model_name=summary_model)
-                        except Exception as e:
-                            logger.warning(f"Summary failed for {name}: {e}")
-                            summary = "(Summary generation failed)"
-                        
-                        file_chapters.append({
-                            "title": fname,
-                            "text": cleaned_text,
-                            "summary": summary,
-                            "parent_file": fname
-                        })
-                
-                st.session_state['chapters_data'] = file_chapters
-                st.toast(f"Processed {len(file_chapters)} {'chapters' if detect_chapters else 'files'}", icon="📚")
+        col_proc, col_fast = st.columns([1, 1])
+        with col_proc:
+            if st.button("Process Files & Generate Summary", type="secondary"):
+                 with st.spinner("Processing files..."):
+                    _process_files(uploaded_files, detect_chapters, chunk_size, summary_model, skip_summary=False)
+        
+        with col_fast:
+            if st.button("⚡ Fast Track: PDF ➡️ Cards", type="primary", help="Skips summary generation and goes straight to cards."):
+                 with st.spinner("Fast Tracking: Processing & Generating..."):
+                    _process_files(uploaded_files, detect_chapters, chunk_size, summary_model, skip_summary=True)
+                    _generate_cards(
+                        provider=provider,
+                        model_name=model_name,
+                        chunk_size=chunk_size,
+                        card_length=card_length,
+                        card_density=card_density,
+                        enable_highlighting=enable_highlighting,
+                        custom_prompt=custom_prompt,
+                        formatting_mode=formatting_mode,
+                        deck_type=deck_type,
+                        base_deck_name=base_deck_name,
+                        developer_mode=developer_mode
+                    )
         
         # Show Data & Generate
         if 'chapters_data' in st.session_state and st.session_state['chapters_data']:
@@ -159,93 +291,20 @@ def render_generator(config):
             st.divider()
 
             # Global Gen Button
-            if st.button("⚡ Generate All Anki Cards", type="primary"):
-                try:
-                    total_chapters = len(st.session_state['chapters_data'])
-                    all_dfs = []
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    provider_code = "google" if provider == "Google Gemini" else "openrouter"
-                    
-                    if 'generated_questions' not in st.session_state:
-                        st.session_state['generated_questions'] = []
-                    
-                    for ch_idx, chapter in enumerate(st.session_state['chapters_data']):
-                        raw_text = chapter['text']
-                        cleaned = clean_text(raw_text)
-                        chunks = recursive_character_text_splitter(cleaned, chunk_size=chunk_size)
-                        
-                        status_text.text(f"Processing {chapter['title']}...")
-                        
-                        for chunk_idx, chunk in enumerate(chunks):
-                            current_progress = (ch_idx + (chunk_idx / len(chunks))) / total_chapters
-                            progress_bar.progress(min(current_progress, 1.0))
-                            
-                            csv_chunk = process_chunk(
-                                chunk, 
-                                google_client=st.session_state.google_client,
-                                openrouter_client=st.session_state.openrouter_client,
-                                provider=provider_code,
-                                model_name=model_name,
-                                card_length=card_length,
-                                card_density=card_density,
-                                enable_highlighting=enable_highlighting,
-                                custom_prompt=custom_prompt,
-                                formatting_mode=formatting_mode,
-                                existing_topics=st.session_state['generated_questions']
-                            )
-                            
-                            if csv_chunk and not csv_chunk.startswith("Error"):
-                                try:
-                                    df_chunk = robust_csv_parse(csv_chunk)
-                                    if not df_chunk.empty:
-                                         # Deduplicate against existing questions
-                                         df_chunk = deduplicate_cards(df_chunk, st.session_state['generated_questions'])
-                                         
-                                    if not df_chunk.empty:
-                                         # Track generated questions for future anti-duplication
-                                         new_questions = df_chunk["Front"].tolist()
-                                         st.session_state['generated_questions'].extend(new_questions)
-                                    
-                                    clean_title = chapter['title'].replace(" ", "_").replace(":", "-")
-                                    parent_file = chapter.get('parent_file', chapter['title']).replace(" ", "_").replace(":", "-")
-                                    
-                                    if "Subdecks" in deck_type:
-                                        # If chapters detected, create: Base::ParentFile::Chapter
-                                        if 'parent_file' in chapter and chapter['parent_file'] != chapter['title']:
-                                            df_chunk["Deck"] = f"{base_deck_name}::{parent_file}::{clean_title}"
-                                        else:
-                                            df_chunk["Deck"] = f"{base_deck_name}::{clean_title}"
-                                        df_chunk["Tag"] = ""
-                                    elif "Tags" in deck_type:
-                                         df_chunk["Deck"] = base_deck_name
-                                         df_chunk["Tag"] = clean_title
-                                    else:
-                                         if 'parent_file' in chapter and chapter['parent_file'] != chapter['title']:
-                                             df_chunk["Deck"] = f"{base_deck_name}::{parent_file}::{clean_title}"
-                                         else:
-                                             df_chunk["Deck"] = f"{base_deck_name}::{clean_title}"
-                                         df_chunk["Tag"] = clean_title
-                                    all_dfs.append(df_chunk)
-                                except Exception as e:
-                                    if developer_mode:
-                                        st.warning(f"Failed to parse chunk: {e}")
-                                        st.code(csv_chunk)
-                    
-                    progress_bar.progress(1.0)
-                    if all_dfs:
-                        final_df = pd.concat(all_dfs, ignore_index=True)
-                        final_df = final_df[["Front", "Back", "Deck", "Tag"]]
-                        st.session_state['result_df'] = final_df
-                        # Create proper Anki TSV with header comments
-                        anki_header = "#separator:tab\n#deck column:3\n#tags column:4\n"
-                        tsv_content = final_df.to_csv(sep="\t", index=False, header=False, quoting=1)
-                        st.session_state['result_csv'] = anki_header + tsv_content
-                        st.success(f"Generated {len(final_df)} cards!")
-                    else:
-                        st.error("No cards generated. Check errors above.")
-                except Exception as e:
-                    st.error(f"Error: {e}")
+            if st.button("Generate All Anki Cards (From Summary State)", type="secondary"):
+                 _generate_cards(
+                    provider=provider,
+                    model_name=model_name,
+                    chunk_size=chunk_size,
+                    card_length=card_length,
+                    card_density=card_density,
+                    enable_highlighting=enable_highlighting,
+                    custom_prompt=custom_prompt,
+                    formatting_mode=formatting_mode,
+                    deck_type=deck_type,
+                    base_deck_name=base_deck_name,
+                    developer_mode=developer_mode
+                )
 
             if 'result_df' in st.session_state:
                 st.dataframe(st.session_state['result_df'], use_container_width=True)
