@@ -109,13 +109,17 @@ st.markdown(f"""
 # Initialize Session
 init_session_state()
 
+# Get current view
+current_view = st.session_state.get('current_view', 'generator')
+
 # --- Render Header (Navigation) ---
 # Render header ABOVE the title if logged in
 if st.session_state.get('is_logged_in', False):
     render_header()
 
-# Title
-st.title("🩺 Medical PDF to Anki Converter (AI-Powered)")
+# Title (Only show on generator/cards)
+if current_view != 'chat':
+    st.title("🩺 Medical PDF to Anki Converter (AI-Powered)")
 
 # --- Auth Flow ---
 if not st.session_state.get('is_logged_in', False):
@@ -149,9 +153,6 @@ if not st.session_state.get('keys_configured', False):
         st.rerun()
 
 # --- Main App ---
-
-# Get current view
-current_view = st.session_state.get('current_view', 'generator')
 
 # Render Sidebar & Get Config (Skip in Chat Mode to avoid double controls)
 config = {}

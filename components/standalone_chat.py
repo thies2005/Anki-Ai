@@ -38,9 +38,8 @@ def render_standalone_chat():
     col_back, col_model, col_files, col_actions = st.columns([1, 2, 2, 1])
     
     with col_back:
-        if st.button("← Back", key="chat_back_btn", use_container_width=True):
-            st.session_state.current_view = 'generator'
-            st.rerun()
+        # Back functionality is handled by global header
+        st.write("") 
 
     with col_model:
         with st.popover("⚙️ Model Settings", use_container_width=True):
@@ -89,7 +88,7 @@ def render_standalone_chat():
         with st.popover(label, use_container_width=True):
             st.markdown(f"### Upload Context (Max {MAX_FILE_SIZE_MB}MB/file)")
             uploaded_files = st.file_uploader(
-                "Drag & drop PDF/TXT/MD files",
+                f"Drag & drop PDF/TXT/MD files (Max {MAX_FILE_SIZE_MB}MB/file)",
                 type=["pdf", "txt", "md"],
                 accept_multiple_files=True,
                 key="chat_file_upload",
