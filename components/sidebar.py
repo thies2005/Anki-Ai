@@ -21,13 +21,18 @@ def render_sidebar():
         
         st.divider()
         
-        # Provider Selection
+        # Provider Selection (use default from settings)
+        providers = ["Google Gemini", "OpenRouter", "Z.AI"]
+        default_provider = st.session_state.get('default_provider', 'Google Gemini')
+        default_idx = providers.index(default_provider) if default_provider in providers else 0
+        
         st.markdown("##### 🤖 AI Provider")
         provider = st.radio(
             "Provider", 
-            ["Google Gemini", "OpenRouter", "Z.AI"], 
-            index=0,
-            label_visibility="collapsed"
+            providers, 
+            index=default_idx,
+            label_visibility="collapsed",
+            key="sidebar_provider"
         )
         
         api_key = None
@@ -148,12 +153,19 @@ def render_sidebar():
         
         # --- Model Selection ---
         st.markdown("##### 📦 Model")
+        model_keys = list(model_options.keys())
+        
+        # Use default model if provider matches and model is valid
+        default_model = st.session_state.get('default_model', model_keys[0])
+        default_model_idx = model_keys.index(default_model) if default_model in model_keys else 0
+        
         selected_model_key = st.selectbox(
             "Model", 
-            options=list(model_options.keys()), 
+            options=model_keys, 
             format_func=lambda x: model_options[x],
-            index=0,
-            label_visibility="collapsed"
+            index=default_model_idx,
+            label_visibility="collapsed",
+            key="sidebar_model"
         )
         model_name = selected_model_key
         

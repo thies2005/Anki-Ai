@@ -24,7 +24,10 @@ def init_session_state():
         # Free tier tracking
         "using_free_tier": False,
         "free_tier_rate_limited": False,
-        "rate_limit_message": None
+        "rate_limit_message": None,
+        # Default AI settings
+        "default_provider": "Google Gemini",
+        "default_model": "gemini-2.5-flash"
     }
     
     for key, value in defaults.items():

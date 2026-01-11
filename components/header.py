@@ -134,7 +134,58 @@ def render_settings_modal(config):
         tab_gen, tab_api, tab_anki = st.tabs(["General", "API Keys", "AnkiConnect"])
         
         with tab_gen:
-            st.markdown("##### Preferences")
+            st.markdown("##### Default AI Configuration")
+            st.caption("These settings apply to all features: Chat, Summarizing, and Card Generation.")
+            
+            # Default Provider
+            providers = ["Google Gemini", "OpenRouter", "Z.AI"]
+            current_provider_idx = providers.index(st.session_state.get('default_provider', 'Google Gemini')) if st.session_state.get('default_provider', 'Google Gemini') in providers else 0
+            default_provider = st.selectbox(
+                "Default AI Provider",
+                providers,
+                index=current_provider_idx,
+                key="settings_default_provider"
+            )
+            st.session_state['default_provider'] = default_provider
+            
+            # Default Model (based on provider)
+            if default_provider == "Google Gemini":
+                model_options = {
+                    "gemini-2.5-flash-lite": "Flash Lite (Fastest)",
+                    "gemini-2.5-flash": "Flash (Standard)",
+                    "gemini-3-flash": "Flash 3.0 (Smarter)",
+                    "gemma-3-27b-it": "Gemma 27B (High TPM)"
+                }
+            elif default_provider == "OpenRouter":
+                model_options = {
+                    "xiaomi/mimo-v2-flash:free": "Mimo V2 Flash",
+                    "google/gemini-2.0-flash-exp:free": "Gemini 2.0 Flash",
+                    "mistralai/devstral-2512:free": "Devstral",
+                    "qwen/qwen3-coder:free": "Qwen 3 Coder",
+                    "google/gemma-3-27b-it:free": "Gemma 3 27B"
+                }
+            else:  # Z.AI
+                model_options = {
+                    "GLM-4.7": "GLM-4.7 (Standard)",
+                    "GLM-4.5-air": "GLM-4.5 Air (Light)"
+                }
+            
+            model_keys = list(model_options.keys())
+            current_model = st.session_state.get('default_model', model_keys[0])
+            current_model_idx = model_keys.index(current_model) if current_model in model_keys else 0
+            
+            default_model = st.selectbox(
+                "Default Model",
+                model_keys,
+                format_func=lambda x: model_options[x],
+                index=current_model_idx,
+                key="settings_default_model"
+            )
+            st.session_state['default_model'] = default_model
+            
+            st.divider()
+            
+            st.markdown("##### Other Preferences")
             chunk_size = st.slider("Chunk Size", 5000, 20000, st.session_state.get('chunk_size', 10000), 1000)
             st.session_state['chunk_size'] = chunk_size
             

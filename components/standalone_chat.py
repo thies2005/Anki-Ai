@@ -96,9 +96,16 @@ def render_standalone_chat():
     with col_model:
         with st.popover("⚙️ Model Settings", use_container_width=True):
             st.markdown("##### AI Provider")
+            
+            # Use defaults from settings
+            providers = ["Google Gemini", "OpenRouter", "Z.AI"]
+            default_provider = st.session_state.get('default_provider', 'Google Gemini')
+            default_idx = providers.index(default_provider) if default_provider in providers else 0
+            
             chat_provider = st.radio(
                 "Provider",
-                ["Google Gemini", "OpenRouter", "Z.AI"],
+                providers,
+                index=default_idx,
                 key="chat_provider_select"
             )
             
@@ -124,10 +131,15 @@ def render_standalone_chat():
                     "GLM-4.5-air": "GLM-4.5 Air"
                 }
             
+            model_keys = list(model_options.keys())
+            default_model = st.session_state.get('default_model', model_keys[0])
+            default_model_idx = model_keys.index(default_model) if default_model in model_keys else 0
+            
             chat_model = st.selectbox(
                 "Model",
-                options=list(model_options.keys()),
+                options=model_keys,
                 format_func=lambda x: model_options[x],
+                index=default_model_idx,
                 key="chat_model_select"
             )
 
