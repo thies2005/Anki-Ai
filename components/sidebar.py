@@ -13,7 +13,7 @@ def render_sidebar(cookie_manager=None):
     """Renders the sidebar and returns configuration."""
     auth_manager = UserManager()
     email = st.session_state.get('user_email')
-    user_keys = st.session_state.get('user_keys', {})
+    user_keys = st.session_state.get('user_keys') or {}
 
     with st.sidebar:
         # User info
