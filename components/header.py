@@ -82,7 +82,7 @@ def render_header():
     with col_nav:
         # Right-aligned navigation items
         # We put them in a sub-columns block to push them right visually or just list them
-        n_col1, n_col2, n_col3 = st.columns(3)
+        n_col1, n_col2, n_col3, n_col4 = st.columns(4)
         
         with n_col1:
             if st.button("✨ Generator", key="nav_gen"):
@@ -95,6 +95,11 @@ def render_header():
                 st.rerun()
 
         with n_col3:
+            if st.button("📋 Cards", key="nav_cards"):
+                st.session_state.current_view = 'cards'
+                st.rerun()
+
+        with n_col4:
             # Settings Icon
             if st.button("⚙️ Settings", key="nav_settings"):
                 st.session_state.show_settings_modal = not st.session_state.show_settings_modal
