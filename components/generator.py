@@ -351,12 +351,35 @@ def render_generator(config):
                         """)
                         
                         notes = format_cards_for_ankiconnect(st.session_state['result_df'])
+                        # Get unique deck names
+                        unique_decks = list(set(st.session_state['result_df']['Deck'].tolist()))
                         notes_json = json.dumps(notes)
+                        decks_json = json.dumps(unique_decks)
                         
                         js_code = f"""
                         <script>
                         async function pushToAnki() {{
                             const notes = {notes_json};
+                            const decks = {decks_json};
+                            
+                            // First, create all decks
+                            for (const deck of decks) {{
+                                try {{
+                                    await fetch('http://localhost:8765', {{
+                                        method: 'POST',
+                                        body: JSON.stringify({{
+                                            "action": "createDeck",
+                                            "version": 6,
+                                            "params": {{ "deck": deck }}
+                                        }}),
+                                        headers: {{ 'Content-Type': 'application/json' }}
+                                    }});
+                                }} catch (e) {{
+                                    // Ignore deck creation errors
+                                }}
+                            }}
+                            
+                            // Then add notes
                             const payload = {{
                                 "action": "addNotes",
                                 "version": 6,
@@ -465,12 +488,32 @@ def render_generator(config):
                         with col_single_browser:
                             if st.button(f"🌐 Push (Browser)", key=f"browser_push_btn_{idx}"):
                                 notes = format_cards_for_ankiconnect(df_s)
+                                unique_decks = list(set(df_s['Deck'].tolist()))
                                 notes_json = json.dumps(notes)
+                                decks_json = json.dumps(unique_decks)
                                 
                                 js_code = f"""
                                 <script>
                                 async function pushToAnkiSingle() {{
                                     const notes = {notes_json};
+                                    const decks = {decks_json};
+                                    
+                                    // First, create all decks
+                                    for (const deck of decks) {{
+                                        try {{
+                                            await fetch('http://localhost:8765', {{
+                                                method: 'POST',
+                                                body: JSON.stringify({{
+                                                    "action": "createDeck",
+                                                    "version": 6,
+                                                    "params": {{ "deck": deck }}
+                                                }}),
+                                                headers: {{ 'Content-Type': 'application/json' }}
+                                            }});
+                                        }} catch (e) {{}}
+                                    }}
+                                    
+                                    // Then add notes
                                     const payload = {{
                                         "action": "addNotes",
                                         "version": 6,
@@ -487,10 +530,10 @@ def render_generator(config):
                                             alert('AnkiConnect Error: ' + result.error);
                                         }} else {{
                                             const successCount = result.result.filter(id => id !== null).length;
-                                            alert('Successfully pushed ' + successCount + ' cards for {ch['title']} via Browser!');
+                                            alert('Pushed ' + successCount + ' cards for {ch['title']}!');
                                         }}
                                     }} catch (err) {{
-                                        alert('Failed to connect to Local Anki. Ensure Anki is open and CORS is set to "*" in AnkiConnect config.');
+                                        alert('Failed to connect. Ensure Anki is open with CORS set to "*".');
                                     }}
                                 }}
                                 pushToAnkiSingle();

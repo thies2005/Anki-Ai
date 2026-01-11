@@ -64,11 +64,24 @@ def deduplicate_cards(new_cards: pd.DataFrame, existing_questions: list[str]) ->
 def push_card_to_anki(front: str, back: str, deck: str, tags: list = None, anki_url: str = None) -> bool:
     """
     Pushes a single card to Anki via AnkiConnect.
+    Automatically creates deck if it doesn't exist.
     Returns True if successful.
     """
     if tags is None: tags = []
     if not anki_url:
         anki_url = os.getenv("ANKI_CONNECT_URL", "http://localhost:8765")
+    
+    # First, ensure deck exists
+    create_deck_payload = {
+        "action": "createDeck",
+        "version": 6,
+        "params": {"deck": deck}
+    }
+    
+    try:
+        requests.post(anki_url, json=create_deck_payload, timeout=ANKICONNECT_TIMEOUT)
+    except Exception:
+        pass  # Ignore errors, addNote will fail if deck creation truly fails
     
     note = {
         "deckName": deck,
