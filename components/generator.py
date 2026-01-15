@@ -19,13 +19,44 @@ logger = logging.getLogger(__name__)
 def _sanitize_for_js(data: str) -> str:
     """
     Sanitize data for safe injection into JavaScript.
-    Escapes special characters to prevent XSS attacks.
+    Preserves safe HTML formatting tags (b, i, u, sup, sub, br) while 
+    removing dangerous content (script, event handlers) to prevent XSS.
     """
     if not isinstance(data, str):
         data = str(data)
-    # HTML escape first
+    
+    # List of safe HTML tags to preserve for Anki formatting
+    safe_tags = ['b', 'i', 'u', 'strong', 'em', 'sup', 'sub', 'br', 'p', 'ul', 'ol', 'li']
+    
+    # First, protect safe tags by replacing them with placeholders
+    placeholders = {}
+    for tag in safe_tags:
+        # Opening tags (with or without attributes - strip attributes for safety)
+        pattern = re.compile(rf'<{tag}(?:\s[^>]*)?\s*/?>', re.IGNORECASE)
+        for match in pattern.finditer(data):
+            placeholder = f"__SAFE_TAG_{len(placeholders)}__"
+            placeholders[placeholder] = f"<{tag}>"
+            data = data.replace(match.group(), placeholder, 1)
+        
+        # Closing tags
+        pattern = re.compile(rf'</{tag}>', re.IGNORECASE)
+        for match in pattern.finditer(data):
+            placeholder = f"__SAFE_TAG_{len(placeholders)}__"
+            placeholders[placeholder] = f"</{tag}>"
+            data = data.replace(match.group(), placeholder, 1)
+    
+    # Remove dangerous content (script tags, event handlers)
+    data = re.sub(r'<script[^>]*>.*?</script>', '', data, flags=re.IGNORECASE | re.DOTALL)
+    data = re.sub(r'\s*on\w+\s*=\s*["\'][^"\']*["\']', '', data, flags=re.IGNORECASE)
+    
+    # Now HTML escape the rest
     data = html.escape(data)
-    # Additional JSON string escaping
+    
+    # Restore safe tags from placeholders
+    for placeholder, tag in placeholders.items():
+        data = data.replace(html.escape(placeholder), tag)
+    
+    # Additional JSON string escaping for JavaScript
     data = data.replace('\\', '\\\\').replace('"', '\\"').replace("'", "\\'")
     return data
 
