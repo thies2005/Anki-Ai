@@ -358,19 +358,30 @@ def get_chat_response(messages: list, context: str, provider: str, model_name: s
     
     return "Error: Invalid Provider"
 
-def get_embedding(text: str, provider: str = "google", model_name: str = "text-embedding-004", google_client=None, zai_client=None) -> list:
-    """Generates an embedding vector for the given text."""
+def get_embedding(text, provider: str = "google", model_name: str = "text-embedding-004", google_client=None, zai_client=None):
+    """
+    Generates an embedding vector for the given text or list of texts.
+    Returns a list of floats (single text) or list of list of floats (batch).
+    """
     try:
         if provider == "google":
             client_config = google_client
             if not client_config or not client_config.get("primary"): return []
             primary_client = client_config["primary"]
             
+            # Google GenAI SDK supports list of strings for batch embedding
             result = primary_client.models.embed_content(
                 model=model_name,
                 contents=text
             )
-            return result.embeddings[0].values
+
+            if isinstance(text, list):
+                # Return list of embeddings for batch
+                return [emb.values for emb in result.embeddings]
+            else:
+                # Return single embedding for single text
+                return result.embeddings[0].values
+
         elif provider == "openrouter":
             # OpenRouter might support embeddings, but it's variable.
             return [] 

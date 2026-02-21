@@ -96,28 +96,50 @@ class SQLiteVectorStore:
             metadata_list = metadata_list[:remaining_slots]
 
         new_entries = []
+        valid_indices = []
         
+        # Identify valid chunks first
         for i, text in enumerate(chunks):
-            if len(text) < MIN_CHUNK_LENGTH: 
-                continue
-                
-            emb = get_embedding(text, google_client=google_client, zai_client=zai_client) 
-            if emb:
-                embedding_np = np.array(emb, dtype=np.float32)
-                metadata = metadata_list[i]
-                
-                new_entries.append((
-                    text,
-                    json.dumps(metadata),
-                    embedding_np.tobytes()
-                ))
-                
-                # Update cache
-                self.chunks.append({
-                    "text": text,
-                    "metadata": metadata,
-                    "embedding": embedding_np
-                })
+            if len(text) >= MIN_CHUNK_LENGTH:
+                valid_indices.append(i)
+
+        # Process in batches
+        BATCH_SIZE = 100
+        for i in range(0, len(valid_indices), BATCH_SIZE):
+            batch_indices = valid_indices[i : i + BATCH_SIZE]
+            batch_texts = [chunks[idx] for idx in batch_indices]
+
+            # Batch embedding call
+            embeddings = get_embedding(batch_texts, google_client=google_client, zai_client=zai_client)
+
+            # Validate response
+            if not embeddings or len(embeddings) != len(batch_texts):
+                logger.warning(f"Batch embedding failed or mismatch (Got {len(embeddings) if embeddings else 0}, Expected {len(batch_texts)}). Processing individually.")
+                # Fallback to individual processing
+                embeddings = []
+                for text in batch_texts:
+                    embeddings.append(get_embedding(text, google_client=google_client, zai_client=zai_client))
+
+            for j, emb in enumerate(embeddings):
+                if emb:
+                    original_idx = batch_indices[j]
+                    text = chunks[original_idx]
+                    metadata = metadata_list[original_idx]
+
+                    embedding_np = np.array(emb, dtype=np.float32)
+
+                    new_entries.append((
+                        text,
+                        json.dumps(metadata),
+                        embedding_np.tobytes()
+                    ))
+
+                    # Update cache
+                    self.chunks.append({
+                        "text": text,
+                        "metadata": metadata,
+                        "embedding": embedding_np
+                    })
 
         # Bulk insert to DB
         if new_entries:
