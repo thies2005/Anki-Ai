@@ -500,84 +500,6 @@ def process_chunk(text_chunk: str, google_client=None, openrouter_client=None, z
 # Legacy alias removal or update if strictly needed, but better to update calls.
 # process_chunk_with_gemini = ... (Removing to encourage proper usage)
 
-def analyze_toc_with_gemini(toc_text: str, google_client, model_name: str = "gemini-2.5-flash-lite") -> str:
-    """Extracts chapter structure from text using Gemini."""
-    prompt = f"""You are a PDF Structure Analyzer. 
-    Analyze the following text (which contains the Table of Contents of a medical textbook) and extract the hierarchical chapters.
-    
-    Output strictly valid JSON list of objects:
-    [
-        {{"title": "Chapter Title", "page": <integer_page_number>}},
-        ...
-    ]
-    
-    Rules:
-    1. Ignore preface, foreword, or front matter (pages usually roman numerals or low numbers). Start with Chapter 1 if possible.
-    2. Extract the main chapters or units.
-    3. **CRITICAL**: The 'page' must be the **PDF page number** (integer) found in the text. if the text says "Page 123", output 123.
-    4. If page numbers are missing or not parseable, return an empty list.
-    
-    Text:
-    {toc_text[:MAX_TOC_TEXT]} 
-    """
-
-    try:
-        response = _generate_with_retry(
-            model_name, 
-            prompt, 
-            types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1),
-            google_client,
-            fallback_to_flash_lite=False
-        )
-        return response.text
-    except Exception as e:
-        logger.error(f"Error analyzing TOC: {e}")
-        return "Error analyzing table of contents. Please try again."
-
-def sort_files_with_gemini(file_names: list[str], google_client=None, openrouter_client=None, zai_client=None, model_name: str = "gemma-3-27b-it") -> list[str]:
-    """Sorts a list of filenames logically. Supports Google and OpenRouter."""
-    prompt = f"""Sort the following list of filenames in the most logical chronological or numerical order (e.g. Lecture 1 before Lecture 2, Chapter 1 before 10).
-    
-    Input List:
-    {file_names}
-    
-    Output Strict JSON List of strings (sorted):
-    ["file1.pdf", "file2.pdf", ...]
-    """
-
-    try:
-        if "/" in model_name:
-            # OpenRouter
-            system_instruction = "You are a File Organizer. Output strictly valid JSON."
-            resp_text = _generate_with_openrouter(model_name, system_instruction, prompt, openrouter_client)
-        elif is_zai_model(model_name):
-             # Z.AI
-            system_instruction = "You are a File Organizer. Output strictly valid JSON."
-            resp_text = _generate_with_zai(model_name, system_instruction, prompt, zai_client)
-        else:
-            # Google
-            response = _generate_with_retry(
-                model_name,
-                prompt,
-                types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0),
-                google_client,
-                fallback_to_flash_lite=False
-            )
-            resp_text = response.text
-
-        try:
-            sorted_list = json.loads(resp_text)
-        except json.JSONDecodeError:
-            # Try to extract JSON from text if parsing fails
-            sorted_list = extract_json_from_text(resp_text)
-
-        if isinstance(sorted_list, list) and len(sorted_list) == len(file_names):
-            return sorted_list
-        return file_names
-    except Exception as e:
-        logger.error(f"Failed to sort files with AI: {e}")
-        return file_names
-
 def generate_chapter_summary(text_chunk: str, google_client=None, openrouter_client=None, zai_client=None, model_name: str = "gemma-3-27b-it") -> str:
     """Generates a brief summary of a chapter. Supports Google and OpenRouter."""
     input_text = text_chunk[:MAX_SUMMARY_TEXT]
@@ -605,33 +527,6 @@ def generate_chapter_summary(text_chunk: str, google_client=None, openrouter_cli
     except Exception as e:
         logger.error(f"Summary generation failed: {e}")
         return "Summary generation failed. Please try again."
-
-def generate_full_summary(chapter_summaries: list[str], google_client=None, openrouter_client=None, zai_client=None, model_name: str = "gemma-3-27b-it") -> str:
-    """Aggregates chapter summaries into a document abstract. Supports Google and OpenRouter."""
-    joined_summaries = "\n- ".join(chapter_summaries)
-    prompt = f"Create a coherent summary/abstract of the entire document based on these chapter summaries:\n\n- {joined_summaries}"
-    
-    try:
-        if "/" in model_name:
-            # OpenRouter
-            system_instruction = "You are a Medical Literature Abstractor."
-            return _generate_with_openrouter(model_name, system_instruction, prompt, openrouter_client)
-        elif is_zai_model(model_name):
-            system_instruction = "You are a Medical Literature Abstractor."
-            return _generate_with_zai(model_name, system_instruction, prompt, zai_client)
-        else:
-            # Google
-            response = _generate_with_retry(
-                model_name,
-                prompt,
-                types.GenerateContentConfig(temperature=0.2),
-                google_client,
-                fallback_to_flash_lite=True
-            )
-            return response.text
-    except Exception as e:
-        logger.error(f"Full summary generation failed: {e}")
-        return "Full summary generation failed. Please try again."
 
 def detect_chapters_in_text(text: str, file_name: str, google_client=None, openrouter_client=None, zai_client=None, model_name: str = "gemma-3-27b-it") -> list:
     """

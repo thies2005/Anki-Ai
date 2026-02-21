@@ -15,10 +15,8 @@ from utils.llm_handler import (
     get_chat_response,
     get_embedding,
     generate_chapter_summary,
-    generate_full_summary,
     detect_chapters_in_text,
     split_text_by_chapters,
-    is_openrouter_model,
 )
 
 from utils.pdf_processor import (
@@ -45,10 +43,8 @@ __all__ = [
     "get_chat_response",
     "get_embedding",
     "generate_chapter_summary",
-    "generate_full_summary",
     "detect_chapters_in_text",
     "split_text_by_chapters",
-    "is_openrouter_model",
     # PDF Processor
     "extract_text_from_pdf",
     "clean_text",
