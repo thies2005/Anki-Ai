@@ -17,14 +17,30 @@ DEFAULT_CHUNK_SIZE = 10000
 DEFAULT_OVERLAP = 200
 TOC_PAGE_LIMIT = 50
 
+def _open_pdf_stream(pdf_stream):
+    """
+    Helper to open a PDF stream efficiently.
+    Tries to use zero-copy access (getbuffer) if available to avoid
+    duplicating the file content in memory.
+    """
+    try:
+        pdf_stream.seek(0)
+        if hasattr(pdf_stream, "getbuffer"):
+            return fitz.open(stream=pdf_stream.getbuffer(), filetype="pdf")
+    except Exception:
+        pass
+
+    # Fallback to reading the full stream
+    pdf_stream.seek(0)
+    return fitz.open(stream=pdf_stream.read(), filetype="pdf")
+
 def extract_text_from_pdf(pdf_stream) -> str:
     """
     Extracts all text from a PDF file stream.
     """
     doc = None
     try:
-        pdf_stream.seek(0)  # Ensure we start from beginning
-        doc = fitz.open(stream=pdf_stream.read(), filetype="pdf")
+        doc = _open_pdf_stream(pdf_stream)
         text = []
         for page in doc:
             text.append(page.get_text())
@@ -44,8 +60,7 @@ def get_pdf_front_matter(pdf_stream, page_limit: int = 50) -> str:
     """Extracts text from the first 'page_limit' pages."""
     doc = None
     try:
-        pdf_stream.seek(0)
-        doc = fitz.open(stream=pdf_stream.read(), filetype="pdf")
+        doc = _open_pdf_stream(pdf_stream)
         text = []
         limit = min(page_limit, doc.page_count)
         for i in range(limit):
@@ -76,8 +91,7 @@ def extract_chapters_from_pdf(pdf_stream, ai_extracted_toc: list = None) -> list
         return 0
 
     try:
-        pdf_stream.seek(0)
-        doc = fitz.open(stream=pdf_stream.read(), filetype="pdf")
+        doc = _open_pdf_stream(pdf_stream)
 
         toc = []
         if ai_extracted_toc:
