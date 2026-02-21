@@ -2,6 +2,8 @@ import streamlit as st
 import logging
 import os
 from dotenv import load_dotenv
+import extra_streamlit_components as stx
+from utils.auth import UserManager
 
 from components.session import init_session_state
 from components.sidebar import render_sidebar
@@ -123,8 +125,6 @@ if current_view != 'chat':
 
 
 # --- Initialize Cookie Manager for Session Persistence ---
-import extra_streamlit_components as stx
-from utils.auth import UserManager
 
 # Initialize Cookie Manager
 cookie_manager = stx.CookieManager()
