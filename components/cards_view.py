@@ -60,23 +60,6 @@ def _sanitize_for_js(data: str) -> str:
     return data
 
 
-def _sanitize_json_for_js(obj) -> str:
-    """
-    Safely serialize an object to JSON for JavaScript injection.
-    Sanitizes string values to prevent XSS.
-    """
-    if isinstance(obj, str):
-        return json.dumps(_sanitize_for_js(obj))
-    elif isinstance(obj, list):
-        # Recursively sanitize list items
-        return json.dumps([_sanitize_item(item) for item in obj])
-    elif isinstance(obj, dict):
-        # Recursively sanitize dict values
-        return json.dumps({k: _sanitize_item(v) for k, v in obj.items()})
-    else:
-        return json.dumps(obj)
-
-
 def _sanitize_item(item):
     """Recursively sanitize an item for JavaScript injection."""
     if isinstance(item, str):
