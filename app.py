@@ -9,7 +9,6 @@ from components.generator import render_generator
 from components.chat import render_pdf_chat, render_general_chat
 from components.login import render_login
 from components.onboarding import render_onboarding
-from components.history import render_history
 from components.header import render_header, render_settings_modal
 from components.standalone_chat import render_standalone_chat
 from components.cards_view import render_cards_view
